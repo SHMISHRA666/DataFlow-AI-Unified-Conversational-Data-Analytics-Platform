@@ -1,0 +1,98 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DataFlow AI UI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 p-6 font-sans">
+  <header class="text-center mb-6">
+    <h1 class="text-4xl font-bold text-sky-800">DataFlow AI</h1>
+    <p class="text-md text-gray-600 mt-1">Unified Conversational Data Analytics Interface</p>
+  </header>
+
+  <div class="grid grid-cols-6 gap-4 h-screen">
+
+    <!-- Left Panel -->
+    <div class="col-span-1 bg-sky-100 p-4 shadow-lg rounded-lg space-y-5">
+      <h2 class="text-xl font-bold text-sky-800 border-b border-sky-300 pb-2">DataFlow AI</h2>
+
+      <!-- Datasource -->
+      <div>
+        <label class="block text-sm font-medium text-sky-900 mb-1">📊 Datasource</label>
+        <select class="w-full border border-sky-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option>Select source</option>
+          <option>CSV</option>
+          <option>SQL</option>
+          <option>MongoDB</option>
+        </select>
+      </div>
+
+      <!-- Visualization -->
+      <div>
+        <label class="block text-sm font-medium text-sky-900 mb-1">📈 Visualization Type</label>
+        <select class="w-full border border-sky-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option>Bar Chart</option>
+          <option>Line Chart</option>
+          <option>Table</option>
+        </select>
+      </div>
+
+      <!-- Report/Dashboard -->
+      <div>
+        <label class="block text-sm font-medium text-sky-900 mb-1">📑 Report / Dashboard</label>
+        <select class="w-full border border-sky-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option>Single</option>
+          <option>Dashboard</option>
+          <option>Report</option>
+        </select>
+      </div>
+
+      <!-- BI Tool Integration -->
+      <div>
+        <label class="block text-sm font-medium text-sky-900 mb-1">🔗 BI Tool Integration</label>
+        <select class="w-full border border-sky-300 p-2 rounded focus:outline-none focus:ring-2 focus:ring-sky-500">
+          <option>Select BI Tool</option>
+          <option>Power BI</option>
+          <option>Metabase</option>
+          <option>Looker</option>
+          <option>Tableau</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Chat + Prompt Panel -->
+    <div class="col-span-4 flex flex-col space-y-4">
+
+      <!-- Chat Interface -->
+      <div class="flex-1 bg-white p-4 shadow-md rounded-lg border border-gray-200">
+        <h3 class="text-lg font-semibold text-gray-700 border-b border-gray-300 pb-2">💬 Chat Interface</h3>
+        <div class="h-full overflow-y-auto p-3 bg-gray-50 rounded mt-2">
+          <p class="text-gray-500 italic">Chat responses will appear here...</p>
+        </div>
+      </div>
+
+      <!-- Prompt Panel -->
+      <div class="bg-white p-4 shadow-md rounded-lg border border-gray-200">
+        <h3 class="text-lg font-semibold text-gray-700 mb-2">✍️ Prompt Panel</h3>
+        <textarea class="w-full h-28 border border-gray-300 p-3 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-sky-400" placeholder="Type your query here..."></textarea>
+      </div>
+
+    </div>
+
+    <!-- Chat History -->
+    <div class="col-span-1 bg-blue-50 p-4 shadow-md rounded-lg">
+      <h3 class="text-lg font-semibold text-blue-800 border-b border-blue-300 pb-2">📜 Chat History</h3>
+      <ul class="mt-3 space-y-2 max-h-full overflow-y-auto">
+        <li class="text-sm text-blue-600 cursor-pointer hover:underline">Query 1</li>
+        <li class="text-sm text-blue-600 cursor-pointer hover:underline">Query 2</li>
+        <li class="text-sm text-blue-600 cursor-pointer hover:underline">Query 3</li>
+      </ul>
+    </div>
+
+  </div>
+
+</body>
+</html>
