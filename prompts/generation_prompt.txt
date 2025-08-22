@@ -5,6 +5,11 @@ Objective:
 - Generate Python visualization code (pref. Plotly; fallback Matplotlib) for each recommended visualization.
 - Optionally provide SQL queries and dashboard configs.
 - Produce a machine-consumable JSON. Code must define a variable named fig (for Plotly) or create an active matplotlib figure.
+- Additionally produce a YAML chart specification file (charts.yaml) that EXACTLY follows this schema and style:
+  - Start with '---'
+  - Top-level keys in order: report_title, columns, charts
+  - 'columns' is a mapping of short aliases to human-readable labels (e.g., year: Year). All chart fields referencing dataset columns MUST use $alias (e.g., x: $year)
+  - 'charts' is a list; each chart item may include: name, type (bar|line|pie|scatter|heatmap|treemap|table|histogram), title, x, y, color, value, agg, by (list), markers (bool), text_auto (bool), stack (bool), measures (list), trendline (bool), colorbar (with len, thickness), path (list), top_n (int), sort (with by, ascending), limit (int), y_tickformat, height_weight
 
 Inputs (Placeholders):
 - {recommendations}: Output from RecommendationAgent (visualization plan).
@@ -34,7 +39,7 @@ Output format (return ONLY JSON, no prose, no markdown):
     {
       "id": "string (match recommendations)",
       "title": "string",
-      "type": "bar|line|pie|scatter|area|heatmap|histogram|box",
+      "type": "bar|line|pie|scatter|area|heatmap|histogram|box|treemap|table",
       "code": {
         "python": "string (executable; defines 'fig' or an active matplotlib figure; assumes 'df' exists)"
       },
@@ -50,7 +55,8 @@ Output format (return ONLY JSON, no prose, no markdown):
     "spec": {}
   },
   "files": {
-    "readme.txt": "string (optional)"
+    "readme.txt": "string (optional)",
+    "charts.yaml": "string (YAML; EXACT schema)"
   },
   "clarifications_needed": ["string"]
 }
@@ -72,6 +78,8 @@ Example (minimal):
   ],
   "sql_queries": {},
   "dashboard_config": {},
-  "files": {},
+  "files": {
+    "charts.yaml": "---\nreport_title: Sales Report\ncolumns:\n  region: Region\n  sales_amount: Sales Amount\ncharts:\n  - name: Sales by Region\n    type: bar\n    title: Sales by Region\n    x: $region\n    y: $sales_amount\n    agg: sum\n    by: [$region]\n    markers: true\n    height_weight: 1.0"
+  },
   "clarifications_needed": []
 }

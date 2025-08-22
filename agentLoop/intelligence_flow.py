@@ -5,6 +5,12 @@ from agentLoop.agents import AgentRunner
 from agentLoop.chart_executor import ChartExecutorAgent
 from utils.utils import log_step, log_error
 from typing import Dict, Any, List
+from pathlib import Path
+import json
+try:
+    import yaml  # PyYAML is already used elsewhere in the project
+except Exception:
+    yaml = None
 
 
 class IntelligenceLayer:
@@ -21,7 +27,8 @@ class IntelligenceLayer:
         self.chart_executor_agent = ChartExecutorAgent(multi_mcp)
     
     async def process_data_analysis(self, analysis_data: Dict[str, Any], 
-                                  business_context: Dict[str, Any] = None) -> Dict[str, Any]:
+                                  business_context: Dict[str, Any] = None,
+                                  data_context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Complete Intelligence Layer processing pipeline.
         
@@ -41,7 +48,7 @@ class IntelligenceLayer:
             
             # Phase 2: Generate Artifacts
             log_step("🔧 Phase 2: Generating dashboards and code", symbol="2️⃣")
-            generated_artifacts = await self._generate_artifacts(recommendations, analysis_data, business_context)
+            generated_artifacts = await self._generate_artifacts(recommendations, analysis_data, business_context, data_context)
             
             # Phase 3: Create Narratives
             log_step("📝 Phase 3: Creating narratives and reports", symbol="3️⃣")
@@ -59,6 +66,17 @@ class IntelligenceLayer:
                 }
             }
             
+            # Persist outputs (charts.yaml, narrative insights, full results)
+            try:
+                self._persist_outputs(
+                    recommendations,
+                    generated_artifacts,
+                    narratives,
+                    business_context or {},
+                )
+            except Exception as persist_err:
+                log_error(f"Failed to persist output artifacts: {persist_err}")
+
             log_step("✅ Intelligence Layer processing completed", symbol="🎉")
             return intelligence_output
             
@@ -78,7 +96,8 @@ class IntelligenceLayer:
         """Phase 1: Generate KPI and visualization recommendations"""
         
         input_data = {
-            "analysis_data": analysis_data,
+            "user_query": (business_context or {}).get("original_query", ""),
+            "analysis_results": analysis_data,
             "business_context": business_context or {},
             "task": "analyze_data_and_recommend",
             "objective": "Provide intelligent recommendations for KPIs, visualizations, and insights"
@@ -93,12 +112,13 @@ class IntelligenceLayer:
     
     async def _generate_artifacts(self, recommendations: Dict[str, Any], 
                                 analysis_data: Dict[str, Any],
-                                business_context: Dict[str, Any] = None) -> Dict[str, Any]:
+                                business_context: Dict[str, Any] = None,
+                                data_context: Dict[str, Any] = None) -> Dict[str, Any]:
         """Phase 2: Generate dashboards, code, and BI configurations with chart execution"""
         
         input_data = {
             "recommendations": recommendations,
-            "analysis_data": analysis_data,
+            "analysis_results": analysis_data,
             "business_context": business_context or {},
             "task": "generate_data_artifacts",
             "objective": "Create production-ready visualizations, dashboards, and BI integrations"
@@ -112,6 +132,9 @@ class IntelligenceLayer:
             raise Exception(f"GenerationAgent failed: {generation_result.get('error', 'Unknown error')}")
         
         generation_output = generation_result["output"]
+        # Ensure YAML artifacts from GenerationAgent are preserved
+        files_section = generation_output.get("files", {}) if isinstance(generation_output, dict) else {}
+        charts_yaml = files_section.get("charts.yaml")
         
         # Step 2: Execute generated charts and create actual visualization files
         log_step("🎨 Executing chart code and creating visualization files", symbol="2️⃣")
@@ -129,13 +152,18 @@ class IntelligenceLayer:
                     "output_formats": ["png", "svg", "html"],
                     "quality": "high",
                     "interactive": True
-                }
+                },
+                data_context=data_context or {},
+                recommendations=recommendations
             )
             
             if chart_execution_result["success"]:
                 # Combine generation output with chart execution results
                 enhanced_output = generation_output.copy()
                 enhanced_output["chart_execution"] = chart_execution_result["output"]
+                # Re-attach charts.yaml if present
+                if charts_yaml is not None:
+                    enhanced_output.setdefault("files", {})["charts.yaml"] = charts_yaml
                 
                 # Update visualization entries with file paths
                 executed_charts = chart_execution_result["output"].get("charts_created", [])
@@ -162,6 +190,9 @@ class IntelligenceLayer:
                 log_error(f"Chart execution failed: {chart_execution_result.get('error')}")
                 # Return generation output without chart execution
                 generation_output["chart_execution_error"] = chart_execution_result.get("error")
+                # Keep YAML even on failure
+                if charts_yaml is not None:
+                    generation_output.setdefault("files", {})["charts.yaml"] = charts_yaml
                 return generation_output
         else:
             log_step("ℹ️ No visualizations to execute, returning generation output only", symbol="ℹ️")
@@ -174,9 +205,10 @@ class IntelligenceLayer:
         """Phase 3: Create human-readable narratives and reports"""
         
         input_data = {
+            "user_query": (business_context or {}).get("original_query", ""),
             "recommendations": recommendations,
             "generated_artifacts": generated_artifacts,
-            "analysis_data": analysis_data,
+            "analysis_results": analysis_data,
             "business_context": business_context or {},
             # Provide expected chart ids and file references to enforce per-chart insights
             "expected_chart_ids": [viz.get("id") for viz in generated_artifacts.get("generated_visualizations", [])],
@@ -195,6 +227,136 @@ class IntelligenceLayer:
         else:
             raise Exception(f"NarrativeAgent failed: {result.get('error', 'Unknown error')}")
 
+    def _safe_get_output_dir(self) -> Path:
+        """Return the output directory used across artifacts.
+
+        Uses the chart executor's default directory for consistency.
+        """
+        return Path("generated_charts")
+
+    def _persist_outputs(self, recommendations: Dict[str, Any],
+                        generated_artifacts: Dict[str, Any],
+                        narratives: Dict[str, Any],
+                        business_context: Dict[str, Any]) -> None:
+        """Persist charts.yaml, narrative insights JSON, and full results JSON.
+
+        - charts.yaml: contains details for all generated charts (with file paths)
+        - narrative_insights.json: raw narrative output
+        - results_intelligence_layer.json: combined top-level results for downstream use
+        """
+        output_dir = self._safe_get_output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1) Write charts.yaml (EXACT schema: report_title, columns, charts)
+        try:
+            if yaml is not None:
+                charts_yaml_obj = self._build_charts_yaml(recommendations, generated_artifacts, business_context)
+                charts_yaml_path = output_dir / "charts.yaml"
+                with charts_yaml_path.open("w", encoding="utf-8") as f:
+                    yaml.safe_dump(charts_yaml_obj, f, sort_keys=False, allow_unicode=True)
+            else:
+                log_error("PyYAML not available; skipping charts.yaml write")
+        except Exception as e:
+            log_error(f"Error writing charts.yaml: {e}")
+
+        # 2) Write narrative_insights.json
+        try:
+            narrative_path = output_dir / "narrative_insights.json"
+            with narrative_path.open("w", encoding="utf-8") as f:
+                json.dump(narratives or {}, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            log_error(f"Error writing narrative_insights.json: {e}")
+
+        # 3) Write results_intelligence_layer.json (combined subset)
+        try:
+            results_path = Path("results_intelligence_layer.json")
+            combined = {
+                "recommendations": recommendations,
+                "generated_artifacts": generated_artifacts,
+                "narratives": narratives,
+                "metadata": {
+                    "report_title": business_context.get("report_title") or business_context.get("original_query") or "DataFlow AI Intelligence Report"
+                }
+            }
+            with results_path.open("w", encoding="utf-8") as f:
+                json.dump(combined, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            log_error(f"Error writing results_intelligence_layer.json: {e}")
+
+    def _build_charts_yaml(self, recommendations: Dict[str, Any],
+                           generated_artifacts: Dict[str, Any],
+                           business_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a YAML object resembling the provided example, filled with available details.
+
+        Includes chart specs from recommendations and file paths from chart execution results.
+        """
+        report_title = business_context.get("report_title") or business_context.get("original_query") or "DataFlow AI Report"
+
+        # Map recommended viz by id for spec
+        rec_viz_list = (recommendations or {}).get("recommended_visualizations", [])
+        rec_by_id = {viz.get("id"): viz for viz in rec_viz_list if viz.get("id")}
+
+        # Aggregate executed file paths by chart_id
+        charts_created = ((generated_artifacts or {}).get("chart_execution", {}) or {}).get("charts_created", [])
+        files_by_id: Dict[str, Dict[str, str]] = {}
+        for c in charts_created:
+            cid = c.get("chart_id")
+            if not cid:
+                continue
+            files_by_id.setdefault(cid, {})[c.get("file_format", "")] = c.get("file_path")
+
+        # Use generated_visualizations for titles/types/ids
+        gen_list = (generated_artifacts or {}).get("generated_visualizations", [])
+        charts_yaml_list: List[Dict[str, Any]] = []
+        for viz in gen_list:
+            cid = viz.get("id")
+            title = viz.get("title", cid)
+            vtype = viz.get("type", "chart")
+            rec = rec_by_id.get(cid, {})
+            spec = rec.get("spec", {}) if isinstance(rec, dict) else {}
+
+            chart_entry: Dict[str, Any] = {
+                "name": title,
+                "type": vtype,
+                "title": title
+            }
+
+            # Encodings/aggregations where available (convert to $alias form when possible)
+            if spec.get("x"):
+                chart_entry["x"] = f"${spec.get('x')}"
+            if spec.get("y"):
+                chart_entry["y"] = f"${spec.get('y')}"
+            if spec.get("color"):
+                chart_entry["color"] = f"${spec.get('color')}"
+            if spec.get("aggregation"):
+                chart_entry["agg"] = spec.get("aggregation")
+
+            # Attach executed file paths
+            if cid in files_by_id:
+                chart_entry["files"] = files_by_id[cid]
+
+            charts_yaml_list.append(chart_entry)
+
+        # Build columns alias map from analysis types or inferred names
+        # Prefer business-friendly labelization: Title Case from field names
+        # Note: We don't have analysis_results here, so infer from specs and executed files
+        alias_fields = set()
+        for item in charts_yaml_list:
+            for key in ["x", "y", "color", "value"]:
+                val = item.get(key)
+                if isinstance(val, str) and val.startswith("$"):
+                    alias_fields.add(val[1:])
+
+        columns_map: Dict[str, str] = {alias: alias.replace("_", " ").title() for alias in sorted(alias_fields)}
+
+        yaml_obj: Dict[str, Any] = {
+            "report_title": report_title,
+            "columns": columns_map,
+            "charts": charts_yaml_list
+        }
+
+        return yaml_obj
+
 
 class IntelligenceWorkflow:
     """
@@ -205,7 +367,8 @@ class IntelligenceWorkflow:
         self.intelligence_layer = IntelligenceLayer(multi_mcp)
     
     async def process_dataflow_request(self, user_query: str, analysis_results: Dict[str, Any],
-                                     business_context: Dict[str, Any] = None) -> Dict[str, Any]:
+                                     business_context: Dict[str, Any] = None,
+                                     data_context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Main entry point for DataFlow AI Intelligence processing
         
@@ -232,70 +395,16 @@ class IntelligenceWorkflow:
         
         # Process through Intelligence Layer
         intelligence_output = await self.intelligence_layer.process_data_analysis(
-            analysis_results, business_context
+            analysis_results, business_context, data_context
         )
         
         # Add workflow metadata
         intelligence_output["workflow_info"] = {
             "workflow_type": "dataflow_ai_intelligence",
             "user_query": user_query,
-            "processing_timestamp": "auto-generated",
+            "processing_timestamp": __import__("datetime").datetime.utcnow().isoformat() + "Z",
             "intelligence_layer_status": intelligence_output.get("processing_summary", {}).get("status", "unknown")
         }
         
         return intelligence_output
 
-
-# Example usage and testing function
-async def test_intelligence_layer():
-    """Test function to demonstrate Intelligence Layer capabilities"""
-    
-    # Mock multi_mcp for testing
-    class MockMCP:
-        pass
-    
-    mock_mcp = MockMCP()
-    workflow = IntelligenceWorkflow(mock_mcp)
-    
-    # Example analysis data (would come from earlier DataFlow AI stages)
-    sample_analysis = {
-        "schema": {
-            "columns": ["date", "sales", "region", "product", "customer_segment"],
-            "types": {"date": "datetime", "sales": "numeric", "region": "categorical", 
-                     "product": "categorical", "customer_segment": "categorical"}
-        },
-        "statistics": {
-            "sales": {"mean": 15000, "std": 5000, "min": 1000, "max": 50000},
-            "records_count": 10000,
-            "date_range": {"start": "2023-01-01", "end": "2024-12-31"}
-        },
-        "patterns": {
-            "trends": ["increasing_sales_q4", "regional_variance_high"],
-            "anomalies": ["unusual_spike_november"],
-            "correlations": [{"vars": ["sales", "region"], "strength": 0.7}]
-        }
-    }
-    
-    sample_context = {
-        "domain": "retail_sales",
-        "audience": ["executives", "sales_managers"],
-        "objectives": ["performance_tracking", "trend_analysis", "forecasting"]
-    }
-    
-    # Test the workflow
-    user_query = "Analyze our sales performance and create a dashboard showing key trends and insights"
-    
-    try:
-        result = await workflow.process_dataflow_request(
-            user_query, sample_analysis, sample_context
-        )
-        print("✅ Intelligence Layer test completed successfully")
-        return result
-    except Exception as e:
-        print(f"❌ Intelligence Layer test failed: {e}")
-        return None
-
-
-if __name__ == "__main__":
-    # Run test if script is executed directly
-    asyncio.run(test_intelligence_layer())

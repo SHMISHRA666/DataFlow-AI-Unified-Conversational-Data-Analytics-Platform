@@ -43,7 +43,7 @@ Output format (return ONLY JSON, no prose, no markdown):
   "recommended_visualizations": [
     {
       "id": "string (slug)",
-      "type": "bar_chart" | "line_chart" | "pie_chart" | "scatter_plot" | "area_chart" | "heatmap" | "table" | "histogram",
+      "type": "bar_chart" | "line_chart" | "pie_chart" | "scatter_plot" | "area_chart" | "heatmap" | "table" | "histogram" | "treemap",
       "data_columns": ["string"],
       "title_suggestion": "string",
       "rationale": "string",

@@ -10,6 +10,7 @@ import json
 import traceback
 from pathlib import Path
 from typing import Dict, Any, List, Optional
+import pandas as pd
 from agentLoop.agents import AgentRunner
 from utils.utils import log_step, log_error
 import importlib.util
@@ -110,27 +111,124 @@ class ChartExecutor:
             log_error(f"Unexpected error during package installation: {e}")
             return False
     
-    def prepare_sample_data(self, data_context: Dict[str, Any]) -> str:
-        """Prepare sample data for chart generation"""
-        # Create sample data based on context
-        sample_data_code = """
-import pandas as pd
-import numpy as np
+    def build_df_loader_preamble(self, data_context: Dict[str, Any]) -> str:
+        """Build Python code to load a DataFrame named df from data_context.
 
-# Sample data for demonstration
-np.random.seed(42)
-sample_data = {
-    'region': ['North', 'South', 'East', 'West', 'Central'] * 20,
-    'sales': np.random.normal(15000, 5000, 100).astype(int),
-    'product': ['Product A', 'Product B', 'Product C', 'Product D'] * 25,
-    'date': pd.date_range('2024-01-01', periods=100, freq='D'),
-    'customer_segment': ['Enterprise', 'SMB', 'Consumer'] * 33 + ['Enterprise']
-}
-df = pd.DataFrame(sample_data)
-"""
-        return sample_data_code
+        Supported keys (first match wins):
+          - df_csv_path: str (+ optional csv_read_kwargs: dict)
+          - df_tsv_path: str (+ optional tsv_read_kwargs: dict)
+          - df_excel_path: str (+ optional excel_read_kwargs: dict)
+          - df_parquet_path: str
+          - df_feather_path: str
+          - df_pickle_path: str
+          - df_json_records_path: str (expects lines JSON)
+          - df_json_path: str (regular JSON)
+          - df_path: str (generic path; infer by extension; supports csv, tsv, xlsx/xls, parquet, feather, json)
+        """
+        if not data_context:
+            # Fail fast to prevent silent sample data usage
+            return (
+                "df = None\n"
+                "raise RuntimeError('No data_context provided to ChartExecutor; cannot materialize df')\n"
+            )
+
+        def _q(path: str) -> str:
+            # Quote a filesystem path safely for Python source
+            return repr(str(path))
+
+        if isinstance(data_context, dict):
+            if data_context.get("df_excel_path"):
+                excel_kwargs = data_context.get("excel_read_kwargs") or {}
+                import json as _json
+                excel_kwargs_literal = _json.dumps(excel_kwargs)
+                return (
+                    f"excel_path = {_q(data_context['df_excel_path'])}\n"
+                    f"_excel_kwargs = {excel_kwargs_literal}\n"
+                    "df = pd.read_excel(excel_path, **_excel_kwargs)\n"
+                )
+            if data_context.get("df_tsv_path"):
+                tsv_kwargs = data_context.get("tsv_read_kwargs") or {}
+                import json as _json
+                tsv_kwargs_literal = _json.dumps(tsv_kwargs)
+                return (
+                    f"tsv_path = {_q(data_context['df_tsv_path'])}\n"
+                    f"_tsv_kwargs = {tsv_kwargs_literal}\n"
+                    "df = pd.read_csv(tsv_path, sep='\t', **_tsv_kwargs)\n"
+                )
+            if data_context.get("df_parquet_path"):
+                return (
+                    f"parquet_path = {_q(data_context['df_parquet_path'])}\n"
+                    "df = pd.read_parquet(parquet_path)\n"
+                )
+            if data_context.get("df_feather_path"):
+                return (
+                    f"feather_path = {_q(data_context['df_feather_path'])}\n"
+                    "df = pd.read_feather(feather_path)\n"
+                )
+            if data_context.get("df_pickle_path"):
+                return (
+                    f"pickle_path = {_q(data_context['df_pickle_path'])}\n"
+                    "df = pd.read_pickle(pickle_path)\n"
+                )
+            if data_context.get("df_json_records_path"):
+                return (
+                    f"json_path = {_q(data_context['df_json_records_path'])}\n"
+                    "df = pd.read_json(json_path, lines=True)\n"
+                )
+            if data_context.get("df_json_path"):
+                return (
+                    f"json_path = {_q(data_context['df_json_path'])}\n"
+                    "df = pd.read_json(json_path)\n"
+                )
+            if data_context.get("df_csv_path"):
+                csv_kwargs = data_context.get("csv_read_kwargs") or {}
+                # Serialize kwargs to literal Python
+                import json as _json
+                kwargs_literal = _json.dumps(csv_kwargs)
+                return (
+                    f"csv_path = {_q(data_context['df_csv_path'])}\n"
+                    f"_csv_kwargs = {kwargs_literal}\n"
+                    "df = pd.read_csv(csv_path, **_csv_kwargs)\n"
+                )
+            if data_context.get("df_path"):
+                csv_kwargs = data_context.get("csv_read_kwargs") or {}
+                tsv_kwargs = data_context.get("tsv_read_kwargs") or {}
+                excel_kwargs = data_context.get("excel_read_kwargs") or {}
+                json_kwargs = data_context.get("json_read_kwargs") or {}
+                import json as _json
+                _csv_kwargs = _json.dumps(csv_kwargs)
+                _tsv_kwargs = _json.dumps(tsv_kwargs)
+                _excel_kwargs = _json.dumps(excel_kwargs)
+                _json_kwargs = _json.dumps(json_kwargs)
+                return (
+                    f"_generic_path = {_q(data_context['df_path'])}\n"
+                    f"_csv_kwargs = {_csv_kwargs}\n"
+                    f"_tsv_kwargs = {_tsv_kwargs}\n"
+                    f"_excel_kwargs = {_excel_kwargs}\n"
+                    f"_json_kwargs = {_json_kwargs}\n"
+                    "_ext = Path(_generic_path).suffix.lower()\n"
+                    "if _ext in ['.csv']:\n"
+                    "    df = pd.read_csv(_generic_path, **_csv_kwargs)\n"
+                    "elif _ext in ['.tsv']:\n"
+                    "    df = pd.read_csv(_generic_path, sep='\t', **_tsv_kwargs)\n"
+                    "elif _ext in ['.xlsx', '.xls']:\n"
+                    "    df = pd.read_excel(_generic_path, **_excel_kwargs)\n"
+                    "elif _ext == '.json':\n"
+                    "    df = pd.read_json(_generic_path, **_json_kwargs)\n"
+                    "elif _ext == '.parquet':\n"
+                    "    df = pd.read_parquet(_generic_path)\n"
+                    "elif _ext == '.feather':\n"
+                    "    df = pd.read_feather(_generic_path)\n"
+                    "else:\n"
+                    "    raise RuntimeError(f'Unsupported file extension for df_path: {_ext}')\n"
+                )
+
+        return (
+            "df = None\n"
+            "raise RuntimeError('Unsupported or incomplete data_context; provide one of df_*_path keys')\n"
+        )
     
-    def enhance_code_for_execution(self, original_code: str, chart_id: str, fallback_mode: bool = False) -> str:
+    def enhance_code_for_execution(self, original_code: str, chart_id: str, data_context: Dict[str, Any], fallback_mode: bool = False) -> str:
         """Enhance generated code for safe execution and file output"""
         
         if fallback_mode:
@@ -151,38 +249,57 @@ output_dir = Path("{self.output_directory}")
 png_path = output_dir / "png" / f"{{chart_id}}.png"
 svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
 
-# Sample data preparation
-{self.prepare_sample_data({})}
+# DataFrame loading from pipeline-provided data_context
+{self.build_df_loader_preamble(data_context)}
 
 try:
-    # Convert plotly code to matplotlib fallback
+    # Generic matplotlib fallbacks using simple heuristics on df
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    datetime_cols = df.select_dtypes(include=['datetime']).columns.tolist()
+    non_numeric_cols = [c for c in df.columns if c not in numeric_cols]
+
     if "px.bar" in '''{original_code}''':
-        # Simple bar chart fallback
+        # Bar chart: aggregate first numeric by first non-numeric
+        if not numeric_cols:
+            raise ValueError('No numeric columns available for bar chart fallback')
+        cat_col = non_numeric_cols[0] if non_numeric_cols else df.columns[0]
+        num_col = numeric_cols[0]
+        grouped = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False)
         plt.figure(figsize=(10, 6))
-        plt.bar(df['region'], df['sales'])
-        plt.title('Sales Performance by Region')
-        plt.xlabel('Region')
-        plt.ylabel('Sales Amount ($)')
+        plt.bar(grouped.index.astype(str), grouped.values)
+        plt.title(f'{{num_col}} by {{cat_col}}')
+        plt.xlabel(cat_col)
+        plt.ylabel(num_col)
         plt.xticks(rotation=45)
         plt.tight_layout()
     elif "px.line" in '''{original_code}''':
-        # Simple line chart fallback
+        # Line chart: plot first numeric over first datetime (or index)
+        if not numeric_cols:
+            raise ValueError('No numeric columns available for line chart fallback')
+        x_col = datetime_cols[0] if datetime_cols else (df.columns[0] if len(df.columns) > 0 else None)
+        y_col = numeric_cols[0]
+        if x_col is None:
+            raise ValueError('No suitable x-axis column for line chart fallback')
+        series = df.sort_values(by=x_col).set_index(x_col)[y_col]
         plt.figure(figsize=(10, 6))
-        daily_sales = df.groupby('date')['sales'].sum()
-        plt.plot(daily_sales.index, daily_sales.values)
-        plt.title('Sales Trend Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Sales Amount ($)')
+        plt.plot(series.index, series.values)
+        plt.title(f'{{y_col}} over {{x_col}}')
+        plt.xlabel(str(x_col))
+        plt.ylabel(y_col)
         plt.xticks(rotation=45)
         plt.tight_layout()
     elif "px.pie" in '''{original_code}''':
-        # Simple pie chart fallback
+        # Pie chart: share of first numeric by first non-numeric
+        if not numeric_cols:
+            raise ValueError('No numeric columns available for pie chart fallback')
+        cat_col = non_numeric_cols[0] if non_numeric_cols else df.columns[0]
+        num_col = numeric_cols[0]
+        grouped = df.groupby(cat_col)[num_col].sum()
         plt.figure(figsize=(8, 8))
-        product_sales = df.groupby('product')['sales'].sum()
-        plt.pie(product_sales.values, labels=product_sales.index, autopct='%1.1f%%')
-        plt.title('Sales Distribution by Product')
+        plt.pie(grouped.values, labels=grouped.index.astype(str), autopct='%1.1f%%')
+        plt.title(f'{{num_col}} distribution by {{cat_col}}')
     else:
-        # Try to execute original code with matplotlib only
+        # Try to naively execute original code with matplotlib replacements
 {self._indent_code(original_code.replace("px.", "plt.").replace("fig.", "plt."), 8)}
     
     # Save the plot
@@ -230,8 +347,8 @@ png_path = output_dir / "png" / f"{{chart_id}}.png"
 svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
 html_path = output_dir / "html" / f"{{chart_id}}.html"
 
-# Sample data preparation
-{self.prepare_sample_data({})}
+# DataFrame loading from pipeline-provided data_context
+{self.build_df_loader_preamble(data_context)}
 
 try:
     # Execute original code
@@ -340,7 +457,7 @@ except Exception as e:
         
         return execution_result
     
-    async def process_generation_output(self, generation_output: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_generation_output(self, generation_output: Dict[str, Any], data_context: Dict[str, Any] = None, recommendations: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process GenerationAgent output and create actual charts"""
         
         log_step("🎨 Starting chart execution process", symbol="🚀")
@@ -350,9 +467,9 @@ except Exception as e:
             "charts_created": [],
             "executed_code": [],
             "data_processing": {
-                "data_source": "sample_generated_data",
-                "records_processed": 100,
-                "data_preparation_steps": ["sample_data_creation", "type_conversion"]
+                "data_source": "pipeline_data_context",
+                "records_processed": None,
+                "data_preparation_steps": ["df_load_from_data_context"]
             },
             "performance_metrics": {
                 "total_execution_time_seconds": 0.0,
@@ -362,7 +479,8 @@ except Exception as e:
                 "total_charts_requested": 0,
                 "total_charts_created": 0,
                 "success_rate": 0.0
-            }
+            },
+            "chart_data_summaries": []
         }
         
         start_time = time.time()
@@ -385,6 +503,38 @@ except Exception as e:
                 else:
                     log_step("✅ Using matplotlib fallback mode", symbol="🎨")
         
+        # Validate data context early
+        supported_keys = [
+            "df_parquet_path", "df_csv_path", "df_tsv_path", "df_excel_path", "df_pickle_path", "df_json_records_path", "df_json_path", "df_feather_path", "df_path"
+        ]
+        if not data_context or not any(k in (data_context or {}) for k in supported_keys):
+            log_error("❌ No valid data_context provided; expected one of df_*_path keys")
+            return {
+                "execution_status": "failed",
+                "charts_created": [],
+                "executed_code": [],
+                "error": "Missing or invalid data_context; cannot materialize df"
+            }
+        
+        # Prepare rec specs for numeric summaries
+        rec_by_id: Dict[str, Any] = {}
+        if isinstance(recommendations, dict):
+            for rv in recommendations.get("recommended_visualizations", []) or []:
+                if isinstance(rv, dict) and rv.get("id"):
+                    rec_by_id[rv["id"]] = rv
+
+        # Attempt to load df locally for summaries
+        df_local: Optional[pd.DataFrame] = None
+        try:
+            df_local = self._load_df_from_context(data_context)
+            if df_local is not None:
+                try:
+                    execution_summary["data_processing"]["records_processed"] = int(len(df_local))
+                except Exception:
+                    pass
+        except Exception as e:
+            log_error(f"Failed to load df for summaries: {e}")
+
         # Process visualizations from generation output
         generated_visualizations = generation_output.get("generated_visualizations", [])
         execution_summary["execution_summary"]["total_charts_requested"] = len(generated_visualizations)
@@ -409,7 +559,7 @@ except Exception as e:
                     log_step(f"Using matplotlib fallback mode for {chart_id}", symbol="🔄")
                 
                 # Enhance code for execution
-                enhanced_code = self.enhance_code_for_execution(python_code, chart_id, fallback_mode)
+                enhanced_code = self.enhance_code_for_execution(python_code, chart_id, data_context, fallback_mode)
                 
                 # Execute code safely
                 exec_result = await self.execute_code_safely(enhanced_code, chart_id)
@@ -441,6 +591,16 @@ except Exception as e:
                     
                     execution_summary["charts_created"].append(chart_info)
                     log_step(f"✅ Created {file_info['format'].upper()}: {file_info['path']}", symbol="📊")
+
+                # Compute numeric summary for narrative support
+                if df_local is not None:
+                    spec = rec_by_id.get(chart_id, {}).get("spec", {})
+                    try:
+                        summary = self._compute_chart_summary(df_local, viz.get("type"), spec)
+                        summary.update({"chart_id": chart_id, "title": viz.get("title", chart_id)})
+                        execution_summary["chart_data_summaries"].append(summary)
+                    except Exception as e:
+                        log_error(f"Summary computation failed for {chart_id}: {e}")
                 
             except Exception as e:
                 log_error(f"Failed to execute chart {chart_id}: {e}")
@@ -470,6 +630,97 @@ except Exception as e:
         
         return execution_summary
 
+    def _load_df_from_context(self, data_context: Dict[str, Any]) -> Optional[pd.DataFrame]:
+        if not isinstance(data_context, dict):
+            return None
+        if data_context.get("df_excel_path"):
+            return pd.read_excel(data_context["df_excel_path"], **(data_context.get("excel_read_kwargs") or {}))
+        if data_context.get("df_csv_path"):
+            return pd.read_csv(data_context["df_csv_path"], **(data_context.get("csv_read_kwargs") or {}))
+        if data_context.get("df_tsv_path"):
+            return pd.read_csv(data_context["df_tsv_path"], sep="\t", **(data_context.get("tsv_read_kwargs") or {}))
+        if data_context.get("df_parquet_path"):
+            return pd.read_parquet(data_context["df_parquet_path"]) 
+        if data_context.get("df_feather_path"):
+            return pd.read_feather(data_context["df_feather_path"]) 
+        if data_context.get("df_json_records_path"):
+            return pd.read_json(data_context["df_json_records_path"], lines=True)
+        if data_context.get("df_json_path"):
+            return pd.read_json(data_context["df_json_path"]) 
+        if data_context.get("df_pickle_path"):
+            return pd.read_pickle(data_context["df_pickle_path"]) 
+        if data_context.get("df_path"):
+            p = Path(data_context["df_path"])
+            ext = p.suffix.lower()
+            if ext == ".csv":
+                return pd.read_csv(p, **(data_context.get("csv_read_kwargs") or {}))
+            if ext == ".tsv":
+                return pd.read_csv(p, sep="\t", **(data_context.get("tsv_read_kwargs") or {}))
+            if ext in [".xlsx", ".xls"]:
+                return pd.read_excel(p, **(data_context.get("excel_read_kwargs") or {}))
+            if ext == ".json":
+                return pd.read_json(p, **(data_context.get("json_read_kwargs") or {}))
+            if ext == ".parquet":
+                return pd.read_parquet(p)
+            if ext == ".feather":
+                return pd.read_feather(p)
+        return None
+
+    def _compute_chart_summary(self, df: pd.DataFrame, chart_type: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {}
+        x = spec.get("x")
+        y = spec.get("y")
+        color = spec.get("color")
+        agg = (spec.get("aggregation") or "none").lower()
+
+        # Try to parse y like 'sum(col)'
+        if isinstance(y, str) and "(" in y and ")" in y:
+            func = y.split("(")[0].strip().lower()
+            inner = y.split("(", 1)[1].rsplit(")", 1)[0].strip()
+            if func in ["sum", "avg", "mean", "count", "min", "max"]:
+                agg = "avg" if func == "mean" else func
+                y = inner
+
+        def apply_agg(series):
+            if agg == "sum":
+                return series.sum()
+            if agg in ["avg", "mean"]:
+                return series.mean()
+            if agg == "count":
+                return series.count()
+            if agg == "min":
+                return series.min()
+            if agg == "max":
+                return series.max()
+            return series
+
+        # Build basic groupby summary
+        if x and y and x in df.columns and y in df.columns:
+            grp = df.groupby(x)[y]
+            values = grp.apply(apply_agg)
+            values = values.dropna()
+            if not values.empty:
+                top = values.sort_values(ascending=False).head(5)
+                bottom = values.sort_values(ascending=True).head(5)
+                summary["x"] = x
+                summary["y"] = y
+                summary["agg"] = agg
+                summary["top"] = [{"label": str(k), "value": float(v)} for k, v in top.items()]
+                summary["bottom"] = [{"label": str(k), "value": float(v)} for k, v in bottom.items()]
+                summary["max"] = {"label": str(top.index[0]), "value": float(top.iloc[0])}
+                summary["min"] = {"label": str(bottom.index[0]), "value": float(bottom.iloc[0])}
+                try:
+                    total = float(values.sum()) if agg in ["sum", "count"] else float(values.mean())
+                    summary["total_or_average"] = total
+                except Exception:
+                    pass
+                if len(top) >= 2 and top.iloc[1] != 0:
+                    summary["top_vs_second_ratio"] = float(top.iloc[0] / top.iloc[1])
+
+        # Additional summaries per type can be added here
+        summary["chart_type"] = chart_type
+        return summary
+
 
 class ChartExecutorAgent:
     """
@@ -482,7 +733,9 @@ class ChartExecutorAgent:
         self.chart_executor = ChartExecutor()
     
     async def execute_charts(self, generation_output: Dict[str, Any], 
-                           execution_config: Dict[str, Any] = None) -> Dict[str, Any]:
+                           execution_config: Dict[str, Any] = None,
+                           data_context: Dict[str, Any] = None,
+                           recommendations: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Execute generated charts and create actual visualization files
         
@@ -497,13 +750,16 @@ class ChartExecutorAgent:
             log_step("🎨 Starting ChartExecutorAgent", symbol="🚀")
             
             # Use ChartExecutor to process the generation output
-            execution_result = await self.chart_executor.process_generation_output(generation_output)
+            execution_result = await self.chart_executor.process_generation_output(generation_output, data_context, recommendations)
             
             # Run the ChartExecutorAgent to enhance the results with AI analysis
             input_data = {
                 "generation_output": generation_output,
                 "execution_result": execution_result,
                 "execution_config": execution_config or {},
+                # Provide summary of data context without leaking paths unnecessarily
+                "data_context_keys": list((data_context or {}).keys()),
+                "chart_data_summaries": execution_result.get("chart_data_summaries", []),
                 "task": "analyze_and_enhance_chart_execution",
                 "objective": "Analyze chart execution results and provide insights and recommendations"
             }
@@ -525,59 +781,3 @@ class ChartExecutorAgent:
             return {"success": False, "error": str(e)}
 
 
-# Test function
-async def test_chart_executor():
-    """Test the ChartExecutor with sample generation output"""
-    
-    # Sample generation output from GenerationAgent
-    sample_generation_output = {
-        "generated_visualizations": [
-            {
-                "id": "sales_by_region",
-                "title": "Sales Performance by Region",
-                "type": "bar",
-                "code": {
-                    "python": """
-import plotly.express as px
-fig = px.bar(df, x='region', y='sales', title='Sales Performance by Region')
-fig.update_layout(
-    xaxis_title='Region',
-    yaxis_title='Sales Amount ($)',
-    showlegend=False
-)
-"""
-                }
-            },
-            {
-                "id": "sales_trend",
-                "title": "Sales Trend Over Time",
-                "type": "line",
-                "code": {
-                    "python": """
-import plotly.express as px
-fig = px.line(df, x='date', y='sales', title='Sales Trend Over Time')
-fig.update_layout(
-    xaxis_title='Date',
-    yaxis_title='Sales Amount ($)'
-)
-"""
-                }
-            }
-        ]
-    }
-    
-    # Test chart execution
-    executor = ChartExecutor()
-    result = await executor.process_generation_output(sample_generation_output)
-    
-    print("Chart execution test completed!")
-    print(f"Charts created: {len(result['charts_created'])}")
-    for chart in result['charts_created']:
-        print(f"  - {chart['title']}: {chart['file_path']}")
-    
-    return result
-
-
-if __name__ == "__main__":
-    # Run test if script is executed directly
-    asyncio.run(test_chart_executor())

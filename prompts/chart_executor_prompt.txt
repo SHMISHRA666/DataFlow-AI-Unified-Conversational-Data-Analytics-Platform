@@ -8,6 +8,7 @@ Inputs (Placeholders):
 - {generation_output}: JSON from GenerationAgent
 - {execution_result}: System execution report (files, timings, logs)
 - {execution_config}: Output formats, quality, interactivity
+- {data_context_keys}: Keys provided from the pipeline data context (for provenance)
 - {output_dir}: Target directory name (if relevant)
 
 Constraints:
@@ -150,7 +151,7 @@ Example (minimal):
   "execution_status": "partial_success",
   "charts_created": [{"chart_id": "regional_sales_bar", "title": "Sales by Region", "chart_type": "bar", "file_path": "generated_charts/png/regional_sales_bar.png", "file_format": "png", "file_size_bytes": 28431, "generation_time_seconds": 0.9, "interactive": false}],
   "executed_code": [],
-  "data_processing": {"data_source": "sample_generated_data", "records_processed": 100, "data_preparation_steps": ["sample"]},
+  "data_processing": {"data_source": "pipeline_data_context", "records_processed": null, "data_preparation_steps": ["df_load_from_data_context"]},
   "chart_enhancements": [],
   "output_management": {"output_directory": "generated_charts", "file_naming_convention": "<id>.<fmt>", "storage_location": "local"},
   "performance_metrics": {"total_execution_time_seconds": 2.3, "charts_per_second": 0.43},
