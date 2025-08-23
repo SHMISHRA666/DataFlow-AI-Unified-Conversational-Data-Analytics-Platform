@@ -4,6 +4,9 @@ import asyncio
 from agentLoop.agents import AgentRunner
 from utils.utils import log_step, log_error
 from typing import Dict, Any, List
+from datetime import datetime
+from pathlib import Path
+import json
 
 
 class OrchestrationLayer:
@@ -17,8 +20,9 @@ class OrchestrationLayer:
         self.multi_mcp = multi_mcp
         self.agent_runner = AgentRunner(multi_mcp)
     
-    async def discover_and_catalog(self, organization_info: Dict[str, Any], 
-                                 discovery_scope: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def discover_and_catalog(self, organization_context: Dict[str, Any], 
+                                 discovery_constraints: Dict[str, Any] = None,
+                                 user_query: str = "") -> Dict[str, Any]:
         """
         Complete discovery and cataloging process.
         
@@ -33,7 +37,7 @@ class OrchestrationLayer:
             log_step("🔍 Starting data discovery and cataloging", symbol="🚀")
             
             # Run Discovery Agent
-            discovery_results = await self._run_discovery(organization_info, discovery_scope)
+            discovery_results = await self._run_discovery(organization_context, discovery_constraints, user_query)
             
             log_step("✅ Discovery and cataloging completed", symbol="🎉")
             return {
@@ -57,7 +61,7 @@ class OrchestrationLayer:
                 }
             }
     
-    async def monitor_system(self, monitoring_context: Dict[str, Any]) -> Dict[str, Any]:
+    async def monitor_system(self, system_context: Dict[str, Any], user_query: str = "") -> Dict[str, Any]:
         """
         Complete system monitoring process.
         
@@ -71,7 +75,7 @@ class OrchestrationLayer:
             log_step("📊 Starting system monitoring", symbol="🚀")
             
             # Run Monitoring Agent
-            monitoring_results = await self._run_monitoring(monitoring_context)
+            monitoring_results = await self._run_monitoring(system_context, user_query)
             
             log_step("✅ System monitoring completed", symbol="🎉")
             return {
@@ -95,9 +99,10 @@ class OrchestrationLayer:
                 }
             }
     
-    async def comprehensive_orchestration(self, organization_info: Dict[str, Any],
-                                        monitoring_context: Dict[str, Any],
-                                        discovery_scope: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def comprehensive_orchestration(self, organization_context: Dict[str, Any],
+                                        system_context: Dict[str, Any],
+                                        discovery_constraints: Dict[str, Any] = None,
+                                        user_query: str = "") -> Dict[str, Any]:
         """
         Run both discovery and monitoring in a coordinated workflow.
         
@@ -113,8 +118,8 @@ class OrchestrationLayer:
             log_step("🎯 Starting comprehensive orchestration", symbol="🚀")
             
             # Run both agents in parallel for efficiency
-            discovery_task = self._run_discovery(organization_info, discovery_scope)
-            monitoring_task = self._run_monitoring(monitoring_context)
+            discovery_task = self._run_discovery(organization_context, discovery_constraints, user_query)
+            monitoring_task = self._run_monitoring(system_context, user_query)
             
             discovery_results, monitoring_results = await asyncio.gather(
                 discovery_task, monitoring_task, return_exceptions=True
@@ -164,13 +169,15 @@ class OrchestrationLayer:
                 }
             }
     
-    async def _run_discovery(self, organization_info: Dict[str, Any], 
-                           discovery_scope: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _run_discovery(self, organization_context: Dict[str, Any], 
+                           discovery_constraints: Dict[str, Any] = None,
+                           user_query: str = "") -> Dict[str, Any]:
         """Run the Discovery Agent"""
         
         input_data = {
-            "organization_info": organization_info,
-            "discovery_scope": discovery_scope or {},
+            "user_query": user_query,
+            "organization_context": organization_context or {},
+            "discovery_constraints": discovery_constraints or {},
             "task": "discover_and_catalog_data_sources",
             "objective": "Discover available data sources and create comprehensive data catalog"
         }
@@ -182,11 +189,14 @@ class OrchestrationLayer:
         else:
             raise Exception(f"DiscoveryAgent failed: {result.get('error', 'Unknown error')}")
     
-    async def _run_monitoring(self, monitoring_context: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_monitoring(self, system_context: Dict[str, Any], user_query: str = "") -> Dict[str, Any]:
         """Run the Monitoring Agent"""
         
         input_data = {
-            "monitoring_context": monitoring_context,
+            "user_query": user_query,
+            "system_context": system_context or {},
+            "metrics": (system_context or {}).get("system_metrics", {}),
+            "monitoring_policies": (system_context or {}).get("monitoring_policies", {}),
             "task": "monitor_system_health_and_performance",
             "objective": "Monitor system health, data quality, and operational performance"
         }
@@ -222,31 +232,29 @@ class OrchestrationWorkflow:
             Complete DataFlow AI discovery output
         """
         
-        # Prepare discovery scope if not provided
+        # Ensure constraints is a dict
         if not discovery_constraints:
-            discovery_constraints = {
-                "scope": "full_organization",
-                "include_external": True,
-                "security_level": "standard",
-                "compliance_requirements": ["GDPR"]
-            }
+            discovery_constraints = {}
         
         # Add user request to context
         organization_context["user_request"] = user_request
         
         # Process through Orchestration Layer
         orchestration_output = await self.orchestration_layer.discover_and_catalog(
-            organization_context, discovery_constraints
+            organization_context, discovery_constraints, user_query=user_request
         )
         
         # Add workflow metadata
         orchestration_output["workflow_info"] = {
             "workflow_type": "dataflow_ai_discovery",
             "user_request": user_request,
-            "processing_timestamp": "auto-generated",
+            "processing_timestamp": datetime.utcnow().isoformat() + "Z",
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
+        # Persist for all runs
+        self._persist_result("discovery_result.json", orchestration_output)
+
         return orchestration_output
     
     async def process_monitoring_request(self, user_request: str,
@@ -264,19 +272,22 @@ class OrchestrationWorkflow:
         
         # Add user request to context
         system_context["user_request"] = user_request
-        system_context["monitoring_timestamp"] = "auto-generated"
+        system_context["monitoring_timestamp"] = datetime.utcnow().isoformat() + "Z"
         
         # Process through Orchestration Layer
-        orchestration_output = await self.orchestration_layer.monitor_system(system_context)
+        orchestration_output = await self.orchestration_layer.monitor_system(system_context, user_query=user_request)
         
         # Add workflow metadata
         orchestration_output["workflow_info"] = {
             "workflow_type": "dataflow_ai_monitoring",
             "user_request": user_request,
-            "processing_timestamp": "auto-generated",
+            "processing_timestamp": datetime.utcnow().isoformat() + "Z",
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
+        # Persist for all runs
+        self._persist_result("monitoring_result.json", orchestration_output)
+
         return orchestration_output
     
     async def process_full_orchestration(self, user_request: str,
@@ -302,105 +313,24 @@ class OrchestrationWorkflow:
         
         # Process through comprehensive orchestration
         orchestration_output = await self.orchestration_layer.comprehensive_orchestration(
-            organization_context, system_context, discovery_constraints
+            organization_context, system_context, discovery_constraints, user_query=user_request
         )
         
         # Add workflow metadata
         orchestration_output["workflow_info"] = {
             "workflow_type": "dataflow_ai_full_orchestration",
             "user_request": user_request,
-            "processing_timestamp": "auto-generated",
+            "processing_timestamp": datetime.utcnow().isoformat() + "Z",
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
+        # Persist for all runs
+        self._persist_result("full_orchestration_result.json", orchestration_output)
+
         return orchestration_output
 
-
-# Example usage and testing function
-async def test_orchestration_layer():
-    """Test function to demonstrate Orchestration Layer capabilities"""
-    
-    # Mock multi_mcp for testing
-    class MockMCP:
-        pass
-    
-    mock_mcp = MockMCP()
-    workflow = OrchestrationWorkflow(mock_mcp)
-    
-    # Example organization context (would come from system configuration)
-    sample_organization = {
-        "name": "TechCorp Solutions",
-        "infrastructure": {
-            "databases": ["PostgreSQL", "MySQL", "MongoDB"],
-            "cloud_platforms": ["AWS", "Azure"],
-            "apis": ["REST", "GraphQL"],
-            "file_systems": ["S3", "Azure Blob", "local storage"]
-        },
-        "compliance_requirements": ["GDPR", "SOX"],
-        "security_level": "high",
-        "departments": ["Sales", "Marketing", "Finance", "Operations"],
-        "data_governance_maturity": "developing"
-    }
-    
-    # Example monitoring context (would come from system monitoring)
-    sample_monitoring = {
-        "system_metrics": {
-            "cpu_usage": 65.2,
-            "memory_usage": 78.5,
-            "disk_usage": 45.0,
-            "network_throughput": 120.5
-        },
-        "pipeline_status": {
-            "active_pipelines": 12,
-            "failed_pipelines": 2,
-            "average_execution_time": "15 minutes"
-        },
-        "data_quality": {
-            "overall_score": 0.85,
-            "issues_detected": 3,
-            "anomalies_count": 1
-        },
-        "user_activity": {
-            "active_users": 45,
-            "queries_per_hour": 234,
-            "peak_usage_time": "10:00-11:00"
-        }
-    }
-    
-    # Test discovery
-    user_request = "Discover all available data sources in our organization and create a comprehensive data catalog"
-    
-    try:
-        discovery_result = await workflow.process_discovery_request(
-            user_request, sample_organization
-        )
-        print("✅ Discovery test completed successfully")
-        
-        # Test monitoring
-        monitoring_request = "Monitor system health and provide performance recommendations"
-        monitoring_result = await workflow.process_monitoring_request(
-            monitoring_request, sample_monitoring
-        )
-        print("✅ Monitoring test completed successfully")
-        
-        # Test full orchestration
-        full_request = "Perform comprehensive discovery and monitoring of our data ecosystem"
-        full_result = await workflow.process_full_orchestration(
-            full_request, sample_organization, sample_monitoring
-        )
-        print("✅ Full orchestration test completed successfully")
-        
-        return {
-            "discovery": discovery_result,
-            "monitoring": monitoring_result,
-            "full_orchestration": full_result
-        }
-        
-    except Exception as e:
-        print(f"❌ Orchestration Layer test failed: {e}")
-        return None
-
-
-if __name__ == "__main__":
-    # Run test if script is executed directly
-    asyncio.run(test_orchestration_layer())
+    def _persist_result(self, filename: str, data: Dict[str, Any]) -> None:
+        try:
+            Path(filename).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as e:
+            log_error(f"Failed to write {filename}: {e}")
