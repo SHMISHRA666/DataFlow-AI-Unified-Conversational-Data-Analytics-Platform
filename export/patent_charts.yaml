@@ -1,0 +1,25 @@
+report_title: Analyze the US patent dataset and propose KPIs and visualizations.
+columns:
+  assignee: assignee
+  publication_number: publication_number
+  cpc_code: cpc_code
+  filing_date: filing_date
+charts:
+- name: Patent Filings Over Time
+  type: line
+  title: Patent Filings Over Time
+  x: $filing_date
+  y: $publication_number
+  agg: count
+- name: Top Patent Assignees
+  type: bar
+  title: Top Patent Assignees
+  x: $assignee
+  y: $publication_number
+  agg: count
+- name: Distribution of Patents by CPC Code
+  type: bar
+  title: Distribution of Patents by CPC Code
+  x: $cpc_code
+  y: $publication_number
+  agg: count
