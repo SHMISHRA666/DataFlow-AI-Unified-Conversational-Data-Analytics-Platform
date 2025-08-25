@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Analysis of US Patents</title><style>
+:root { --bg:#0b0c10; --panel:#12151a; --text:#e6edf3; --muted:#9aa4af; --accent:#7aa2f7; --border:#222833; }
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--text);margin:0;line-height:1.55;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+.container{max-width:1100px;margin:2rem auto;padding:0 1rem 3rem}
+header.report-header{background:linear-gradient(180deg,rgba(122,162,247,.15),transparent 70%);
+  padding:2rem 1rem 1rem;border-bottom:1px solid var(--border);margin-bottom:1.5rem}
+.report-title{font-size:1.75rem;margin:0 0 .25rem}
+.report-subtitle{margin:0;color:var(--muted);font-size:.95rem}
+.toc{margin:1rem 0 2rem;padding:.75rem 1rem;border:1px solid var(--border);border-radius:12px;background:var(--panel)}
+.toc h3{margin-top:0;font-size:1rem;color:var(--muted)}
+.toc a{color:var(--accent);text-decoration:none}
+.toc ul{margin:.25rem 0 0 1.25rem}
+.report-section{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:1rem;
+  margin:1rem 0 1.25rem;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.section-title{margin:.25rem 0 1rem;font-size:1.25rem}
+.chart{background:#0d1016;border:1px dashed var(--border);border-radius:12px;padding:.25rem;margin-bottom:1rem}
+.chart-iframe{width:100%;height:460px;border:none;background:#0d1016;border-radius:10px}
+.chart-img{width:100%;height:auto;display:block;border-radius:10px}
+.chart--missing .placeholder{padding:1rem;color:var(--muted)}
+.insight-kicker{text-transform:uppercase;letter-spacing:.12em;font-size:.75rem;color:var(--muted);margin-top:.5rem}
+footer{margin-top:2rem;text-align:center;color:var(--muted);font-size:.9rem}
+</style>
+</head>
+<body>
+  <div class="container">
+    <header class="report-header">
+      <h1 class="report-title">Analysis of US Patents</h1>
+      <p class="report-subtitle">Auto-generated Executive Summary, Charts with Narrative and Insights, Key Findings, Actionables, Clarifications</p>
+    </header>
+    <div class="toc"><h3>Contents</h3><ul><li><a href="#patent_filings_over_time">Patent Filings Over Time</a></li>
+<li><a href="#top_assignees_bar">Top Patent Assignees</a></li>
+<li><a href="#cpc_code_distribution">Distribution of Patents by CPC Code</a></li></ul></div>
+    
+    <section id="executive_summary" class="report-section">
+      <h2 class="section-title">Executive Summary</h2>
+      <p>Analysis of the US patent dataset reveals key filing trends, leading assignees, and technology areas. Data quality issues exist with the grant_date field which requires correction for accurate grant-related KPI calculation. Focus on patent filing analysis is recommended until data is validated. Vertex Pharmaceuticals leads in patent filings, and A61K35/18 is the most common CPC code.</p>
+    </section>
+    
+    <section id="patent_filings_over_time" class="report-section">
+      <h2 class="section-title">Patent Filings Over Time</h2>
+      
+        <div class="chart">
+          <iframe src="patent_filings_over_time.html" class="chart-iframe" loading="lazy"
+                  sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+      <p>The &#x27;Patent Filings Over Time&#x27; chart shows the trend of patent filings, peaking on 2024-10-28. Understanding these trends can help in resource allocation and strategic planning. The filing date is critical for analyzing trends and future projections.</p>
+      <div class="insight">
+        <div class="insight-kicker">Primary Insight</div>
+        <p>Patent filings peaked at 720 on 2024-10-28, driving overall volume.</p>
+        <div class="insight-kicker">Supporting Evidence</div>
+        <ul><li>Peak filings: 720 on 2024-10-28.</li><li>Lowest filings: 280 on 2024-10-16.</li><li>Total filings: 1000.</li></ul>
+        <div class="insight-kicker">Decision Relevance</div>
+        <p>Optimize resource allocation and forecasting based on trends.</p>
+        <div class="insight-kicker">Caveats</div>
+        <ul><li>None noted</li></ul>
+      </div>
+    </section>
+
+    <section id="top_assignees_bar" class="report-section">
+      <h2 class="section-title">Top Patent Assignees</h2>
+      
+        <div class="chart">
+          <iframe src="top_assignees_bar.html" class="chart-iframe" loading="lazy"
+                  sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+      <p>The &#x27;Top Patent Assignees&#x27; chart identifies Vertex Pharmaceuticals Incorporated as the leading assignee, with 720 filings, which is 2.57x more than Fate Therapeutics, Inc. This highlights the key players in the patent landscape and potential collaboration or competitive analysis.</p>
+      <div class="insight">
+        <div class="insight-kicker">Primary Insight</div>
+        <p>Vertex Pharmaceuticals leads patent assignees with 720 patents.</p>
+        <div class="insight-kicker">Supporting Evidence</div>
+        <ul><li>Vertex Pharmaceuticals: 720 patents.</li><li>Fate Therapeutics: 280 patents.</li><li>Vertex filings are 2.57x Fate Therapeutics.</li></ul>
+        <div class="insight-kicker">Decision Relevance</div>
+        <p>Analyze key players for competitive strategy and partnerships.</p>
+        <div class="insight-kicker">Caveats</div>
+        <ul><li>None noted</li></ul>
+      </div>
+    </section>
+
+    <section id="cpc_code_distribution" class="report-section">
+      <h2 class="section-title">Distribution of Patents by CPC Code</h2>
+      
+        <div class="chart">
+          <iframe src="cpc_code_distribution.html" class="chart-iframe" loading="lazy"
+                  sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+      <p>The &#x27;Distribution of Patents by CPC Code&#x27; chart reveals that A61K35/18 is the most prevalent CPC code, with 80 patents. A focus on understanding innovation within these areas is crucial.</p>
+      <div class="insight">
+        <div class="insight-kicker">Primary Insight</div>
+        <p>Multiple CPC codes lead patent activity, each with 80 filings.</p>
+        <div class="insight-kicker">Supporting Evidence</div>
+        <ul><li>Four CPC codes lead with 80 patents each.</li><li>A61K40/15 is least frequent: 2 patents.</li></ul>
+        <div class="insight-kicker">Decision Relevance</div>
+        <p>Prioritize strategic focus on leading technology areas.</p>
+        <div class="insight-kicker">Caveats</div>
+        <ul><li>None noted</li></ul>
+      </div>
+    </section>
+    
+    <section id="key_findings" class="report-section">
+      <h2 class="section-title">Key Findings</h2>
+      <ul><li>Patent filings peaked on 2024-10-28 with 720 filings.</li><li>Vertex Pharmaceuticals Incorporated leads in patent filings with 720 patents.</li><li>A61K35/18 is the most frequently occurring CPC code with 80 patents.</li></ul>
+    </section>
+    
+    <section id="actionable_insights" class="report-section">
+      <h2 class="section-title">Actionable Insights</h2>
+      <ul><li>Prioritize data validation of the &#x27;grant_date&#x27; column to enable accurate analysis of patent grants.</li><li>Investigate the factors contributing to Vertex Pharmaceuticals&#x27; high patent filing rate to understand their innovation strategy.</li><li>Focus research and development efforts on the A61K35/18 technology area, given its high patent activity.</li></ul>
+    </section>
+    
+    <section id="clarifications_needed" class="report-section">
+      <h2 class="section-title">Clarifications needed</h2>
+      <ul><li>The grant_date column contains only zero values, rendering it unusable for meaningful analysis. Awaiting data validation and updates.</li><li>Confirm audience familiarity with CPC codes; consider a translation/description if needed.</li></ul>
+    </section>
+  </div>
+</body></html>

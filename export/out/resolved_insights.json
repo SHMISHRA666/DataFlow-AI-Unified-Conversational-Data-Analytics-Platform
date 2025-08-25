@@ -1,0 +1,55 @@
+[
+  {
+    "visualization_id": "patent_filings_over_time",
+    "title": "Patent Filings Over Time",
+    "primary_insight": "Patent filings peaked at 720 on 2024-10-28, driving overall volume.",
+    "supporting_evidence": [
+      "Peak filings: 720 on 2024-10-28.",
+      "Lowest filings: 280 on 2024-10-16.",
+      "Total filings: 1000."
+    ],
+    "decision_relevance": "Optimize resource allocation and forecasting based on trends.",
+    "caveats": [],
+    "narrative": "The 'Patent Filings Over Time' chart shows the trend of patent filings, peaking on 2024-10-28. Understanding these trends can help in resource allocation and strategic planning. The filing date is critical for analyzing trends and future projections.",
+    "references": {
+      "html_path": "patent_filings_over_time.html",
+      "png_path": "patent_filings_over_time.png",
+      "svg_path": "patent_filings_over_time.svg"
+    }
+  },
+  {
+    "visualization_id": "top_assignees_bar",
+    "title": "Top Patent Assignees",
+    "primary_insight": "Vertex Pharmaceuticals leads patent assignees with 720 patents.",
+    "supporting_evidence": [
+      "Vertex Pharmaceuticals: 720 patents.",
+      "Fate Therapeutics: 280 patents.",
+      "Vertex filings are 2.57x Fate Therapeutics."
+    ],
+    "decision_relevance": "Analyze key players for competitive strategy and partnerships.",
+    "caveats": [],
+    "narrative": "The 'Top Patent Assignees' chart identifies Vertex Pharmaceuticals Incorporated as the leading assignee, with 720 filings, which is 2.57x more than Fate Therapeutics, Inc. This highlights the key players in the patent landscape and potential collaboration or competitive analysis.",
+    "references": {
+      "html_path": "top_assignees_bar.html",
+      "png_path": "top_assignees_bar.png",
+      "svg_path": "top_assignees_bar.svg"
+    }
+  },
+  {
+    "visualization_id": "cpc_code_distribution",
+    "title": "Distribution of Patents by CPC Code",
+    "primary_insight": "Multiple CPC codes lead patent activity, each with 80 filings.",
+    "supporting_evidence": [
+      "Four CPC codes lead with 80 patents each.",
+      "A61K40/15 is least frequent: 2 patents."
+    ],
+    "decision_relevance": "Prioritize strategic focus on leading technology areas.",
+    "caveats": [],
+    "narrative": "The 'Distribution of Patents by CPC Code' chart reveals that A61K35/18 is the most prevalent CPC code, with 80 patents. A focus on understanding innovation within these areas is crucial.",
+    "references": {
+      "html_path": "cpc_code_distribution.html",
+      "png_path": "cpc_code_distribution.png",
+      "svg_path": "cpc_code_distribution.svg"
+    }
+  }
+]
