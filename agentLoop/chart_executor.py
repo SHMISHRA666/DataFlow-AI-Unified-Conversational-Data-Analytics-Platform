@@ -24,18 +24,24 @@ class ChartExecutor:
     
     def __init__(self, output_directory: str = "generated_charts"):
         self.output_directory = Path(output_directory)
-        self.output_directory.mkdir(exist_ok=True)
-        
-        # Create subdirectories for different formats
-        (self.output_directory / "png").mkdir(exist_ok=True)
-        (self.output_directory / "svg").mkdir(exist_ok=True)
-        (self.output_directory / "html").mkdir(exist_ok=True)
-        (self.output_directory / "pdf").mkdir(exist_ok=True)
+        self._ensure_subdirs()
         
         # Required packages for visualization
         self.required_packages = [
             "matplotlib", "plotly", "seaborn", "pandas", "numpy"
         ]
+
+    def _ensure_subdirs(self) -> None:
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+        (self.output_directory / "png").mkdir(parents=True, exist_ok=True)
+        (self.output_directory / "svg").mkdir(parents=True, exist_ok=True)
+        (self.output_directory / "html").mkdir(parents=True, exist_ok=True)
+        (self.output_directory / "pdf").mkdir(parents=True, exist_ok=True)
+
+    def set_output_directory(self, new_dir: str | Path) -> None:
+        """Update the base output directory (e.g., per-session) and ensure subdirs exist."""
+        self.output_directory = Path(new_dir)
+        self._ensure_subdirs()
         
     def check_dependencies(self) -> Dict[str, bool]:
         """Check if required visualization packages are available"""
@@ -245,7 +251,7 @@ from pathlib import Path
 
 # Set up output paths
 chart_id = "{chart_id}"
-output_dir = Path("{self.output_directory}")
+output_dir = Path(r"{self.output_directory}")
 png_path = output_dir / "png" / f"{{chart_id}}.png"
 svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
 
@@ -342,7 +348,7 @@ except ImportError:
 
 # Set up output paths
 chart_id = "{chart_id}"
-output_dir = Path("{self.output_directory}")
+output_dir = Path(r"{self.output_directory}")
 png_path = output_dir / "png" / f"{{chart_id}}.png"
 svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
 html_path = output_dir / "html" / f"{{chart_id}}.html"
@@ -735,7 +741,8 @@ class ChartExecutorAgent:
     async def execute_charts(self, generation_output: Dict[str, Any], 
                            execution_config: Dict[str, Any] = None,
                            data_context: Dict[str, Any] = None,
-                           recommendations: Dict[str, Any] = None) -> Dict[str, Any]:
+                           recommendations: Dict[str, Any] = None,
+                           output_directory: str | None = None) -> Dict[str, Any]:
         """
         Execute generated charts and create actual visualization files
         
@@ -749,6 +756,10 @@ class ChartExecutorAgent:
         try:
             log_step("🎨 Starting ChartExecutorAgent", symbol="🚀")
             
+            # Set per-session output directory if provided
+            if output_directory:
+                self.chart_executor.set_output_directory(output_directory)
+
             # Use ChartExecutor to process the generation output
             execution_result = await self.chart_executor.process_generation_output(generation_output, data_context, recommendations)
             

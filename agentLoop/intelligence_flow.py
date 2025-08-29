@@ -41,6 +41,13 @@ class IntelligenceLayer:
         """
         try:
             log_step("🧠 Starting Intelligence Layer processing", symbol="🚀")
+            # Ensure a stable numeric session_id in business_context
+            if business_context is None:
+                business_context = {}
+            sid = business_context.get("session_id")
+            if not sid:
+                # derive 8-digit time suffix
+                business_context["session_id"] = str(int(__import__('time').time()))[-8:]
             
             # Phase 1: Generate Recommendations
             log_step("📊 Phase 1: Generating recommendations", symbol="1️⃣")
@@ -146,6 +153,9 @@ class IntelligenceLayer:
         )
         
         if has_visualizations:
+            # Determine per-session output directory for chart files
+            session_out_dir = self._safe_get_output_dir((business_context or {}).get("session_id") or (business_context or {}).get("original_query"))
+            session_out_dir.mkdir(parents=True, exist_ok=True)
             chart_execution_result = await self.chart_executor_agent.execute_charts(
                 generation_output,
                 execution_config={
@@ -154,7 +164,8 @@ class IntelligenceLayer:
                     "interactive": True
                 },
                 data_context=data_context or {},
-                recommendations=recommendations
+                recommendations=recommendations,
+                output_directory=str(session_out_dir)
             )
             
             if chart_execution_result["success"]:
@@ -227,12 +238,21 @@ class IntelligenceLayer:
         else:
             raise Exception(f"NarrativeAgent failed: {result.get('error', 'Unknown error')}")
 
-    def _safe_get_output_dir(self) -> Path:
+    def _safe_get_output_dir(self, session_id: str | None = None) -> Path:
         """Return the output directory used across artifacts.
 
-        Uses the chart executor's default directory for consistency.
+        If a session_id is available, nest outputs under generated_charts/<session_id>/
+        to avoid overwrites across runs.
         """
-        return Path("generated_charts")
+        base = Path("generated_charts")
+        if session_id:
+            # Enforce numeric-only folder name to keep it clean and sortable
+            digits_only = ''.join(ch for ch in str(session_id) if ch.isdigit())
+            if digits_only:
+                return base / digits_only
+            # fallback to 8-digit time suffix
+            return base / str(int(__import__('time').time()))[-8:]
+        return base
 
     def _persist_outputs(self, recommendations: Dict[str, Any],
                         generated_artifacts: Dict[str, Any],
@@ -244,7 +264,8 @@ class IntelligenceLayer:
         - narrative_insights.json: raw narrative output
         - results_intelligence_layer.json: combined top-level results for downstream use
         """
-        output_dir = self._safe_get_output_dir()
+        session_id = business_context.get("session_id") or business_context.get("original_query") or "session"
+        output_dir = self._safe_get_output_dir(session_id)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # 1) Write charts.yaml (EXACT schema: report_title, columns, charts)
@@ -261,6 +282,22 @@ class IntelligenceLayer:
 
         # 2) Write narrative_insights.json
         try:
+            # Normalize executed file paths to be relative subfolders so exporters do not duplicate files at root
+            safe_artifacts = dict(generated_artifacts or {})
+            for viz in safe_artifacts.get("generated_visualizations", []) or []:
+                files = viz.get("executed_files") or {}
+                for key in ["html_path", "png_path", "svg_path"]:
+                    p = files.get(key)
+                    if p:
+                        name = Path(p).name
+                        if key == "html_path":
+                            files[key] = str(Path("html") / name)
+                        elif key == "png_path":
+                            files[key] = str(Path("png") / name)
+                        elif key == "svg_path":
+                            files[key] = str(Path("svg") / name)
+                viz["executed_files"] = files
+
             narrative_path = output_dir / "narrative_insights.json"
             with narrative_path.open("w", encoding="utf-8") as f:
                 json.dump(narratives or {}, f, indent=2, ensure_ascii=False)
@@ -269,13 +306,14 @@ class IntelligenceLayer:
 
         # 3) Write results_intelligence_layer.json (combined subset)
         try:
-            results_path = Path("results_intelligence_layer.json")
+            results_path = output_dir / "results_intelligence_layer.json"
             combined = {
                 "recommendations": recommendations,
                 "generated_artifacts": generated_artifacts,
                 "narratives": narratives,
                 "metadata": {
-                    "report_title": business_context.get("report_title") or business_context.get("original_query") or "DataFlow AI Intelligence Report"
+                    "report_title": business_context.get("report_title") or business_context.get("original_query") or "DataFlow AI Intelligence Report",
+                    "session_id": output_dir.name
                 }
             }
             with results_path.open("w", encoding="utf-8") as f:
@@ -305,6 +343,20 @@ class IntelligenceLayer:
                 continue
             files_by_id.setdefault(cid, {})[c.get("file_format", "")] = c.get("file_path")
 
+        def _parse_y_and_agg(y_val: Any, agg_val: Any) -> (str, str):
+            """Normalize y/agg when y is like 'count(col)' or similar."""
+            y_field = None
+            agg_norm = (agg_val or "").lower() if isinstance(agg_val, str) else ""
+            if isinstance(y_val, str) and "(" in y_val and ")" in y_val:
+                fn = y_val.split("(", 1)[0].strip().lower()
+                inner = y_val.split("(", 1)[1].rsplit(")", 1)[0].strip()
+                y_field = inner
+                if fn in ["count", "sum", "avg", "mean", "min", "max"]:
+                    agg_norm = "avg" if fn == "mean" else fn
+            else:
+                y_field = y_val
+            return y_field, agg_norm
+
         # Use generated_visualizations for titles/types/ids
         gen_list = (generated_artifacts or {}).get("generated_visualizations", [])
         charts_yaml_list: List[Dict[str, Any]] = []
@@ -321,15 +373,29 @@ class IntelligenceLayer:
                 "title": title
             }
 
-            # Encodings/aggregations where available (convert to $alias form when possible)
-            if spec.get("x"):
-                chart_entry["x"] = f"${spec.get('x')}"
-            if spec.get("y"):
-                chart_entry["y"] = f"${spec.get('y')}"
-            if spec.get("color"):
-                chart_entry["color"] = f"${spec.get('color')}"
-            if spec.get("aggregation"):
-                chart_entry["agg"] = spec.get("aggregation")
+            # Encodings/aggregations with normalization (e.g., y='count(col)')
+            x_field = spec.get("x")
+            y_field, agg_norm = _parse_y_and_agg(spec.get("y"), spec.get("aggregation"))
+            color_field = spec.get("color")
+
+            if x_field:
+                chart_entry["x"] = f"${x_field}"
+            # For bar/line/scatter include y/agg/color; for pie/histogram keep it minimal
+            if vtype not in ["pie", "histogram"]:
+                if y_field:
+                    chart_entry["y"] = f"${y_field}"
+                # Avoid color=x duplication
+                if color_field and color_field != x_field:
+                    chart_entry["color"] = f"${color_field}"
+                if agg_norm:
+                    chart_entry["agg"] = agg_norm
+            else:
+                # pie: use names via color or x; histogram: use x only
+                if vtype == "pie":
+                    names_field = color_field or x_field
+                    if names_field:
+                        chart_entry["color"] = f"${names_field}"
+                # do not set agg/y/value for pie/hist – builder computes counts automatically
 
             # Attach executed file paths
             if cid in files_by_id:
@@ -337,9 +403,7 @@ class IntelligenceLayer:
 
             charts_yaml_list.append(chart_entry)
 
-        # Build columns alias map from analysis types or inferred names
-        # Prefer business-friendly labelization: Title Case from field names
-        # Note: We don't have analysis_results here, so infer from specs and executed files
+        # Build columns alias map from the actual fields used (exclude computed names like 'count')
         alias_fields = set()
         for item in charts_yaml_list:
             for key in ["x", "y", "color", "value"]:

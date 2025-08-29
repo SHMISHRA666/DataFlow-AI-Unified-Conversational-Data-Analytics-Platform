@@ -11,6 +11,28 @@ from agentLoop.orchestration_flow import OrchestrationWorkflow
 from rich.console import Console
 from pathlib import Path
 from action.executor import run_user_code
+"""Exporters"""
+try:
+    # Plotly report builder (charts_v5-compatible)
+    from export.plotly_v6 import load_any_csv as _plotly_load_csv
+    from export.plotly_v6 import load_guide as _plotly_load_guide
+    from export.plotly_v6 import build_report as _plotly_build_report
+except Exception:
+    _plotly_load_csv = None
+    _plotly_load_guide = None
+    _plotly_build_report = None
+
+try:
+    # Executive HTML report composer
+    from export.report_agent import load_report as _ra_load_report
+    from export.report_agent import resolve_assets as _ra_resolve_assets
+    from export.report_agent import load_asset_map as _ra_load_asset_map
+    from export.report_agent import write_outputs as _ra_write_outputs
+except Exception:
+    _ra_load_report = None
+    _ra_resolve_assets = None
+    _ra_load_asset_map = None
+    _ra_write_outputs = None
 
 class AgentLoop4:
     def __init__(self, multi_mcp, strategy="conservative"):
@@ -292,7 +314,7 @@ Profile each file separately and return details."""
         
         return result
 
-    async def run_intelligence_layer(self, analysis_data, business_context=None, original_query=None):
+    async def run_intelligence_layer(self, analysis_data, business_context=None, original_query=None, dag_context=None, data_context=None):
         """
         Run the Intelligence Layer workflow for DataFlow AI
         
@@ -308,12 +330,38 @@ Profile each file separately and return details."""
             log_step("🧠 Initiating Intelligence Layer processing", symbol="🚀")
             
             # Use the intelligence workflow
+            # Inject numeric session_id into business_context for per-session outputs
+            try:
+                sid = dag_context.plan_graph.graph.get('session_id') if dag_context else None
+                if not business_context:
+                    business_context = {}
+                if sid:
+                    # enforce numeric only
+                    digits_only = ''.join(ch for ch in str(sid) if ch.isdigit())
+                    business_context['session_id'] = digits_only or str(int(__import__('time').time()))[-8:]
+                else:
+                    # ensure we always have a numeric session id
+                    business_context.setdefault('session_id', str(int(__import__('time').time()))[-8:])
+            except Exception:
+                business_context.setdefault('session_id', str(int(__import__('time').time()))[-8:])
+
             result = await self.intelligence_workflow.process_dataflow_request(
                 original_query or "Data analysis and visualization request",
                 analysis_data,
-                business_context
+                business_context,
+                data_context
             )
             
+            # After intelligence outputs are ready, attempt exports here (flow-level integration)
+            try:
+                # Derive a per-session output directory
+                session_id = business_context.get('session_id')
+                exports = self._run_exports_if_available(result, context=dag_context, session_id=session_id)
+                if exports:
+                    result.setdefault("exports", {}).update(exports)
+            except Exception as e:
+                log_error(f"Export step skipped due to error: {e}")
+
             log_step("✅ Intelligence Layer processing completed", symbol="🎉")
             return {"success": True, "output": result}
             
@@ -349,13 +397,126 @@ Profile each file separately and return details."""
         original_query = context.plan_graph.graph.get('original_query', 'Data analysis request')
         
         # Run intelligence layer
+        # Build data_context from user-provided file manifest so chart execution can load df
+        inferred_data_context = self._build_data_context_from_manifest(context)
+
         result = await self.run_intelligence_layer(
             analysis_data, 
             business_context, 
-            original_query
+            original_query,
+            dag_context=context,
+            data_context=inferred_data_context
         )
         
         return result
+
+    def _select_dataset_path_for_export(self, context) -> Path | None:
+        """Best-effort dataset path selection for Plotly export.
+
+        Preference order (no hardcoded fallbacks):
+        - First CSV in graph-level file_manifest
+        - First Excel in graph-level file_manifest
+        """
+        try:
+            manifest = context.plan_graph.graph.get('file_manifest') or []
+            # Try CSV
+            for item in manifest:
+                p = Path(item.get('path', ''))
+                if p.suffix.lower() == '.csv' and p.exists():
+                    return p
+            # Try Excel
+            for item in manifest:
+                p = Path(item.get('path', ''))
+                if p.suffix.lower() in ('.xlsx', '.xls') and p.exists():
+                    return p
+        except Exception:
+            pass
+        return None
+
+    def _run_exports_if_available(self, intelligence_output: dict, context=None, session_id: str | None = None) -> dict:
+        """Run exporters using artifacts persisted by the Intelligence Layer.
+
+        - Plotly gallery: uses generated_charts/charts.yaml + a dataset CSV
+        - Executive report: uses generated_charts/narrative_insights.json + generated assets
+        Returns a dict of export paths/urls that can be attached to outputs.
+        """
+        exports: dict = {}
+
+        # Per-session directory to avoid overwrites
+        out_dir = Path('generated_charts') / (str(session_id) if session_id else '')
+        charts_yaml = out_dir / 'charts.yaml'
+        insights_json = out_dir / 'narrative_insights.json'
+
+        # 1) Plotly gallery export (optional; requires dataset + charts.yaml)
+        try:
+            if _plotly_build_report and charts_yaml.exists():
+                dataset_path: Path | None = None
+                # If a context is available (DAG step), try to infer from file_manifest
+                if context is not None:
+                    dataset_path = self._select_dataset_path_for_export(context)
+                # Final fallback: None -> skip Plotly export
+                if dataset_path and dataset_path.exists():
+                    df = _plotly_load_csv(str(dataset_path)) if _plotly_load_csv else None
+                    guide = _plotly_load_guide(str(charts_yaml)) if _plotly_load_guide else None
+                    if df is not None and guide is not None:
+                        out_html = str(out_dir / 'plotly_index.html')
+                        urls = _plotly_build_report(
+                            df,
+                            guide,
+                            out_html,
+                            publish_py=None,
+                            publish_sharing='public',
+                            no_html=False,
+                            publish_combined=False,
+                            publish_cols=1,
+                            publish_row_height=520,
+                            publish_vspace=0.20,
+                            publish_auto_layout=True,
+                            publish_row_height_weights=None,
+                            publish_hspace=0.08,
+                            publish_width=None,
+                            publish_col_width_weights=None,
+                        )
+                        exports['plotly_html_path'] = out_html
+                        if urls:
+                            exports['chart_studio_urls'] = urls
+        except Exception as e:
+            log_error(f"Plotly export failed: {e}")
+
+        # 2) Executive report export via report_agent (insights + assets)
+        try:
+            if _ra_load_report and insights_json.exists():
+                report = _ra_load_report(insights_json, verbose=False)
+                asset_dirs = [out_dir / 'html', out_dir / 'png', out_dir / 'svg']
+                explicit_map = _ra_load_asset_map(None) if _ra_load_asset_map else {}
+                report.insights, _ = _ra_resolve_assets(report.insights, asset_dirs, explicit_map, verbose=False)  # type: ignore[arg-type]
+                html_path, resolved_path = _ra_write_outputs(report, out_dir, verbose=False)
+                exports['report_html_path'] = str(html_path)
+                exports['resolved_insights_path'] = str(resolved_path)
+        except Exception as e:
+            log_error(f"Executive report export failed: {e}")
+
+        return exports
+
+    def _build_data_context_from_manifest(self, context) -> dict | None:
+        """Build a data_context dict from user-provided file_manifest in the DAG context.
+
+        Returns:
+            dict with one of {df_csv_path|df_excel_path} when available; otherwise None.
+        """
+        try:
+            manifest = (context.plan_graph.graph or {}).get('file_manifest') or []
+            for item in manifest:
+                p = Path(item.get('path', ''))
+                if p.suffix.lower() == '.csv' and p.exists():
+                    return {"df_csv_path": str(p)}
+            for item in manifest:
+                p = Path(item.get('path', ''))
+                if p.suffix.lower() in ('.xlsx', '.xls') and p.exists():
+                    return {"df_excel_path": str(p)}
+        except Exception:
+            return None
+        return None
 
     async def run_discovery_orchestration(self, organization_context, discovery_constraints=None, user_request=None):
         """
