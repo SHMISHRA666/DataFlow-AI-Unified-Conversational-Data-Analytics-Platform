@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""
+rag_ingest.py
+Single-file RAG ingestion pipeline:
+- Extract PDF -> markdown using pymupdf4llm (write_images=True)
+- For each image, call a multimodal model (gemma3:12b / local Ollama) to produce a caption
+- Replace image links with "**Image:** <caption>"
+- Chunk text, get embeddings via an embedding endpoint (nomic-embed-text)
+- Build FAISS index and save metadata JSON
+- Simple search + chat with Gemini CLI
+"""
+
+import os
+import re
+import json
+import base64
+import argparse
+import time
+from pathlib import Path
+from typing import List, Tuple, Dict, Any
+from tqdm import tqdm
+import google.generativeai as genai
+import requests
+import numpy as np
+
+from dotenv import load_dotenv
+load_dotenv() 
+
+# --- Optional imports ---
+try:
+    import faiss
+except Exception as e:
+    raise ImportError("faiss not installed. On mac use 'conda install -c conda-forge faiss-cpu' or 'pip install faiss-cpu'") from e
+
+try:
+    import pymupdf4llm
+except Exception as e:
+    raise ImportError("pymupdf4llm is required. pip install pymupdf4llm") from e
+
+# ---- Config (override with env vars) ----
+DOCS_DIR = Path(os.getenv("DOCS_DIR", "./documents"))
+IMAGES_DIR_NAME = "images"
+FAISS_DIR = Path(os.getenv("FAISS_DIR", "./faiss_index"))
+GEMMA_API_URL = os.getenv("GEMMA_API_URL", "http://localhost:11434/api/generate")
+GEMMA_API_KEY = os.getenv("GEMMA_API_KEY", "")
+GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma3:12b")
+
+EMBED_API_URL = os.getenv("EMBED_API_URL", "http://localhost:11434/api/embeddings")
+EMBED_API_KEY = os.getenv("EMBED_API_KEY", "")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+
+CHUNK_SIZE_WORDS = int(os.getenv("CHUNK_SIZE_WORDS", "256"))
+CHUNK_OVERLAP_WORDS = int(os.getenv("CHUNK_OVERLAP_WORDS", "40"))
+TOP_K = int(os.getenv("TOP_K", "5"))
+
+# Configure Gemini
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+
+# Ensure folders
+DOCS_DIR.mkdir(parents=True, exist_ok=True)
+(IMAGES_DIR := DOCS_DIR / IMAGES_DIR_NAME).mkdir(parents=True, exist_ok=True)
+FAISS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------- Gemini Chat ----------------
+def chat_with_gemini(query: str, context_chunks: List[str]) -> str:
+    context = "\n\n".join(context_chunks)
+    prompt = f"""
+You are a helpful assistant.
+Answer the question based only on the context below.
+
+Context:
+{context}
+
+User question: {query}
+"""
+    model = genai.GenerativeModel("gemini-2.0-flash")
+    response = model.generate_content(prompt)
+    return response.text
+
+
+# ---------------- utilities ----------------
+def log(msg: str):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+
+# ---- 1) PDF -> markdown (images written) ----
+def pdf_to_markdown(pdf_path: Path, images_outdir: Path) -> str:
+    log(f"Extracting PDF: {pdf_path}")
+    md = pymupdf4llm.to_markdown(str(pdf_path), write_images=True, image_path=str(images_outdir))
+    return md or ""
+
+
+# ---- 2) Caption image via GEMMA ----
+def caption_image(image_path: Path) -> str:
+    log(f"Captioning image: {image_path.name}")
+    raw = image_path.read_bytes()
+    b64 = base64.b64encode(raw).decode("utf-8")
+
+    payload = {
+        "model": GEMMA_MODEL,
+        "prompt": (
+            "If there is lots of text in the image, reply ONLY with the exact text. "
+            "Otherwise, describe the image contents succinctly (alt-text style). "
+            "Return NO extra commentary."
+        ),
+        "images": [b64]
+    }
+    headers = {}
+    if GEMMA_API_KEY:
+        headers["Authorization"] = f"Bearer {GEMMA_API_KEY}"
+
+    try:
+        r = requests.post(GEMMA_API_URL, json=payload, headers=headers, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        caption = ""
+        if isinstance(data, dict):
+            caption = data.get("response") or \
+                      (data.get("message") or {}).get("content") or \
+                      (data.get("choices") and data["choices"][0].get("message", {}).get("content"))
+        if caption:
+            return caption.strip()
+    except Exception:
+        pass
+
+    return f"[Could not caption image {image_path.name}]"
+
+
+# ---- 3) Replace image markdown with caption ----
+IMAGE_MD_RE = re.compile(r'!\[.*?\]\((.*?)\)')
+
+def replace_images_with_captions(markdown: str, images_dir: Path) -> str:
+    def _repl(match):
+        src = match.group(1)
+        src_path = (DOCS_DIR / src) if not Path(src).is_absolute() else Path(src)
+        if not src_path.exists():
+            candidate = images_dir / Path(src).name
+            if candidate.exists():
+                src_path = candidate
+        if not src_path.exists():
+            log(f"Image not found for captioning: {src}")
+            return f"[Image not found: {src}]"
+
+        try:
+            caption = caption_image(src_path)
+            try:
+                src_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return f"**Image:** {caption}"
+        except Exception as e:
+            log(f"Warning: failed to caption {src}: {e}")
+            return f"[Image could not be processed: {src}]"
+
+    return IMAGE_MD_RE.sub(_repl, markdown)
+
+
+# ---- 4) Chunking ----
+def chunk_text(text: str, size_words: int = CHUNK_SIZE_WORDS, overlap: int = CHUNK_OVERLAP_WORDS) -> List[str]:
+    words = text.split()
+    if size_words <= 0:
+        return [text]
+    chunks = []
+    i = 0
+    while i < len(words):
+        chunk_words = words[i:i + size_words]
+        chunks.append(" ".join(chunk_words))
+        i += size_words - overlap
+    return chunks
+
+
+# ---- 5) Get embedding ----
+def get_embedding(text: str) -> np.ndarray:
+    payload = {"model": EMBED_MODEL, "prompt": text}
+    headers = {"Content-Type": "application/json"}
+    if EMBED_API_KEY:
+        headers["Authorization"] = f"Bearer {EMBED_API_KEY}"
+
+    r = requests.post(EMBED_API_URL, json=payload, headers=headers, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    emb = None
+    if isinstance(data, dict):
+        emb = data.get("embedding")
+        if emb is None and "data" in data and isinstance(data["data"], list):
+            emb = data["data"][0].get("embedding")
+    if emb is None:
+        raise RuntimeError(f"Embedding response did not include an embedding: {data}")
+    return np.array(emb, dtype=np.float32)
+
+
+# ---- 6) Build FAISS ----
+def build_and_save_faiss(embeddings: List[np.ndarray], metadata: List[Dict[str, Any]], out_dir: Path):
+    if not embeddings:
+        raise ValueError("No embeddings to index")
+    dim = embeddings[0].shape[0]
+    mat = np.stack(embeddings).astype(np.float32)
+    index = faiss.IndexFlatL2(dim)
+    index.add(mat)
+    idx_path = out_dir / "index.bin"
+    meta_path = out_dir / "metadata.json"
+    faiss.write_index(index, str(idx_path))
+    meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
+    log(f"Saved FAISS index -> {idx_path} and metadata -> {meta_path}")
+
+
+# ---- 7) Ingest ----
+# def process_documents(rebuild_index: bool = True):
+#     pdf_files = sorted(DOCS_DIR.glob("*.pdf"))
+#     if not pdf_files:
+#         log("No PDF files found in documents/.")
+#         return
+
+#     embeddings, metadata = [], []
+
+#     for pdf in pdf_files:
+#         log(f"Processing {pdf.name}")
+#         md = pdf_to_markdown(pdf, IMAGES_DIR)
+#         if not md.strip():
+#             log(f"No text extracted from {pdf.name}, skipping.")
+#             continue
+#         md = replace_images_with_captions(md, IMAGES_DIR)
+#         chunks = chunk_text(md)
+
+#         for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {pdf.name}")):
+#             try:
+#                 emb = get_embedding(chunk)
+#             except Exception as e:
+#                 log(f"Failed to embed chunk {i} of {pdf.name}: {e}")
+#                 continue
+#             embeddings.append(emb)
+#             metadata.append({
+#                 "doc": pdf.name,
+#                 "chunk_id": f"{pdf.stem}_{i}",
+#                 "chunk": chunk[:2000]
+#             })
+
+#     if embeddings:
+#         build_and_save_faiss(embeddings, metadata, FAISS_DIR)
+#     else:
+#         log("No embeddings were created.")
+
+
+def process_documents(rebuild_index: bool = True):
+    pdf_files = sorted(DOCS_DIR.glob("*.pdf"))
+    json_files = sorted(DOCS_DIR.glob("*.json"))
+    if not pdf_files and not json_files:
+        log("No PDF or JSON files found in documents/.")
+        return
+
+    embeddings, metadata = [], []
+
+    # --- Handle PDFs ---
+    for pdf in pdf_files:
+        log(f"Processing PDF {pdf.name}")
+        md = pdf_to_markdown(pdf, IMAGES_DIR)
+        if not md.strip():
+            log(f"No text extracted from {pdf.name}, skipping.")
+            continue
+        md = replace_images_with_captions(md, IMAGES_DIR)
+        chunks = chunk_text(md)
+
+        for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {pdf.name}")):
+            try:
+                emb = get_embedding(chunk)
+            except Exception as e:
+                log(f"Failed to embed chunk {i} of {pdf.name}: {e}")
+                continue
+            embeddings.append(emb)
+            metadata.append({
+                "doc": pdf.name,
+                "chunk_id": f"{pdf.stem}_{i}",
+                "chunk": chunk[:2000]
+            })
+
+    # --- Handle JSON ---
+    for js in json_files:
+        log(f"Processing JSON {js.name}")
+        try:
+            data = json.loads(js.read_text())
+            md = json.dumps(data, indent=2, ensure_ascii=False)  # pretty text
+        except Exception as e:
+            log(f"Failed to parse {js.name}: {e}")
+            continue
+        chunks = chunk_text(md)
+
+        for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {js.name}")):
+            try:
+                emb = get_embedding(chunk)
+            except Exception as e:
+                log(f"Failed to embed chunk {i} of {js.name}: {e}")
+                continue
+            embeddings.append(emb)
+            metadata.append({
+                "doc": js.name,
+                "chunk_id": f"{js.stem}_{i}",
+                "chunk": chunk[:2000]
+            })
+
+    if embeddings:
+        build_and_save_faiss(embeddings, metadata, FAISS_DIR)
+    else:
+        log("No embeddings were created.")
+
+
+
+
+# ---- 8) Search ----
+def load_index_and_metadata(index_dir: Path) -> Tuple[Any, List[Dict[str, Any]]]:
+    idx_path = index_dir / "index.bin"
+    meta_path = index_dir / "metadata.json"
+    if not idx_path.exists() or not meta_path.exists():
+        raise FileNotFoundError("Index or metadata not found. Run ingest first.")
+    index = faiss.read_index(str(idx_path))
+    metadata = json.loads(meta_path.read_text())
+    return index, metadata
+
+def search(query: str, k: int = TOP_K):
+    q_emb = get_embedding(query).reshape(1, -1)
+    index, metadata = load_index_and_metadata(FAISS_DIR)
+    D, I = index.search(q_emb, k)
+    results = []
+    for dist, idx in zip(D[0], I[0]):
+        if idx < 0:
+            continue
+        md = metadata[idx]
+        results.append({"score": float(dist), "doc": md.get("doc"), "chunk_id": md.get("chunk_id"), "chunk": md.get("chunk")})
+    return results
+
+
+# ---- CLI ----
+def main():
+    parser = argparse.ArgumentParser(description="RAG ingest/search/chat")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("ingest", help="Process PDFs and build FAISS index")
+
+    s = sub.add_parser("search", help="Search the FAISS index")
+    s.add_argument("q", nargs="+", help="Query text to search")
+
+    c = sub.add_parser("chat", help="Chat with your docs using Gemini")
+    c.add_argument("q", nargs="+", help="User question")
+
+    args = parser.parse_args()
+
+    if args.cmd == "ingest":
+        process_documents(rebuild_index=True)
+
+    elif args.cmd == "search":
+        query = " ".join(args.q)
+        results = search(query)
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+
+    elif args.cmd == "chat":
+        query = " ".join(args.q)
+        results = search(query)
+        context_chunks = [r["chunk"] for r in results]
+        answer = chat_with_gemini(query, context_chunks)
+        print("\n=== Gemini Answer ===\n")
+        print(answer)
+
+
+if __name__ == "__main__":
+    main()

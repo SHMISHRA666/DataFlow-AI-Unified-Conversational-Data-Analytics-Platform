@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# FAISS index & generated files
+faiss_index/
+documents/images/
+*.bin
+*.json
+
+# Environment
+.env
+
+# macOS
+.DS_Store
