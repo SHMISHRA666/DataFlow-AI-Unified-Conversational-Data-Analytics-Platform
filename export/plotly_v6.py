@@ -166,7 +166,10 @@ def expand_auto_aliases(spec: Dict[str, Any], schema: Dict[str, List[str]]):
     def map_value(v):
         if v is None: return v
         key = str(v)
-        if key.startswith("$"): key = key[1:]
+        if key.startswith("$"): 
+            bare_key = key[1:]
+            # Return bare column name if alias not found, instead of keeping the $prefix
+            return alias.get(bare_key, bare_key)
         return alias.get(key, v)
 
     def map_list(lst):
