@@ -9,6 +9,8 @@ from agentLoop.visualizer import ExecutionVisualizer
 from agentLoop.intelligence_flow import IntelligenceWorkflow
 from agentLoop.orchestration_flow import OrchestrationWorkflow
 from rich.console import Console
+import pandas as pd
+from dotenv import load_dotenv
 from pathlib import Path
 from action.executor import run_user_code
 """Exporters"""
@@ -17,10 +19,12 @@ try:
     from export.plotly_v6 import load_any_csv as _plotly_load_csv
     from export.plotly_v6 import load_guide as _plotly_load_guide
     from export.plotly_v6 import build_report as _plotly_build_report
+    from export.plotly_v6 import init_chart_studio as _plotly_init_cs
 except Exception:
     _plotly_load_csv = None
     _plotly_load_guide = None
     _plotly_build_report = None
+    _plotly_init_cs = None
 
 try:
     # Executive HTML report composer
@@ -449,6 +453,11 @@ Profile each file separately and return details."""
 
         # 1) Plotly gallery export (optional; requires dataset + charts.yaml)
         try:
+            # Ensure .env variables are loaded (PLOTLY_USERNAME, PLOTLY_API_KEY)
+            try:
+                load_dotenv()
+            except Exception:
+                pass
             if _plotly_build_report and charts_yaml.exists():
                 dataset_path: Path | None = None
                 # If a context is available (DAG step), try to infer from file_manifest
@@ -456,18 +465,35 @@ Profile each file separately and return details."""
                     dataset_path = self._select_dataset_path_for_export(context)
                 # Final fallback: None -> skip Plotly export
                 if dataset_path and dataset_path.exists():
-                    df = _plotly_load_csv(str(dataset_path)) if _plotly_load_csv else None
+                    # Load DataFrame from CSV or Excel
+                    df = None
+                    if dataset_path.suffix.lower() == '.csv':
+                        df = _plotly_load_csv(str(dataset_path)) if _plotly_load_csv else None
+                    elif dataset_path.suffix.lower() in ('.xlsx', '.xls'):
+                        try:
+                            df = pd.read_excel(str(dataset_path))
+                        except Exception as e:
+                            log_error(f"Failed to read Excel dataset for Plotly export: {e}")
                     guide = _plotly_load_guide(str(charts_yaml)) if _plotly_load_guide else None
                     if df is not None and guide is not None:
                         out_html = str(out_dir / 'plotly_index.html')
+                        # Initialize Chart Studio publishing if credentials are available
+                        publish_py = None
+                        if _plotly_init_cs is not None:
+                            try:
+                                # Prefer env vars PLOTLY_USERNAME/PLOTLY_API_KEY; passing None uses env in init_chart_studio
+                                publish_py = _plotly_init_cs(None, None, None)
+                            except Exception as e:
+                                # Credentials missing or package not installed; proceed without publishing
+                                log_error(f"Chart Studio init skipped: {e}")
                         urls = _plotly_build_report(
                             df,
                             guide,
                             out_html,
-                            publish_py=None,
+                            publish_py=publish_py,
                             publish_sharing='public',
                             no_html=False,
-                            publish_combined=False,
+                            publish_combined=True,
                             publish_cols=1,
                             publish_row_height=520,
                             publish_vspace=0.20,
@@ -490,7 +516,12 @@ Profile each file separately and return details."""
                 asset_dirs = [out_dir / 'html', out_dir / 'png', out_dir / 'svg']
                 explicit_map = _ra_load_asset_map(None) if _ra_load_asset_map else {}
                 report.insights, _ = _ra_resolve_assets(report.insights, asset_dirs, explicit_map, verbose=False)  # type: ignore[arg-type]
-                html_path, resolved_path = _ra_write_outputs(report, out_dir, verbose=False)
+                html_path, resolved_path = _ra_write_outputs(
+                    report,
+                    out_dir,
+                    verbose=False,
+                    chart_studio_urls=exports.get('chart_studio_urls')
+                )
                 exports['report_html_path'] = str(html_path)
                 exports['resolved_insights_path'] = str(resolved_path)
         except Exception as e:

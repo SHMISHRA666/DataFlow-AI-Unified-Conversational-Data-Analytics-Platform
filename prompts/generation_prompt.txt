@@ -39,7 +39,7 @@ Output format (return ONLY JSON, no prose, no markdown):
     {
       "id": "string (match recommendations)",
       "title": "string",
-      "type": "bar|line|pie|scatter|area|heatmap|histogram|box|treemap|table",
+      "type": "bar|line|pie|scatter|heatmap|histogram|treemap|table",
       "code": {
         "python": "string (executable; defines 'fig' or an active matplotlib figure; assumes 'df' exists)"
       },

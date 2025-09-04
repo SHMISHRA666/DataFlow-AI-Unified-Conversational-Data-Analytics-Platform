@@ -30,7 +30,7 @@ Output format (return ONLY JSON, no prose, no markdown):
     {
       "chart_id": "string",
       "title": "string",
-      "chart_type": "bar|line|pie|scatter|heatmap|histogram|box|area",
+      "chart_type": "bar|line|pie|scatter|heatmap|histogram|treemap|table",
       "file_path": "string (relative path to generated file)",
       "file_format": "png|svg|html|pdf",
       "file_size_bytes": 0,

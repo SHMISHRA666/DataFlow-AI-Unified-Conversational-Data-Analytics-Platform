@@ -34,6 +34,10 @@ from typing import Dict, List, Optional, Tuple, Any
 from dotenv import load_dotenv
 load_dotenv()  # does nothing if .env is absent
 
+try:
+    import yaml  # Optional, used to read charts.yaml if available
+except Exception:
+    yaml = None
 
 # -------------------- Data model --------------------
 
@@ -467,6 +471,7 @@ def write_outputs(
     verbose: bool=False,
     html_name: str = "report.html",
     resolved_name: str = "resolved_insights.json",
+    chart_studio_urls: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     if verbose: print(f"→ Writing outputs to {out_dir.resolve()}")
@@ -482,7 +487,8 @@ def write_outputs(
             it.references.svg_path = str(Path("svg") / Path(it.references.svg_path).name)
 
     # Derive title and filename from report.report_title if provided
-    title = (report.report_title or "").strip() or "Sales Insights Report"
+    # Fallback to a neutral title if none is available
+    title = (report.report_title or "").strip() or "Insights Report"
     def _slugify_filename(s: str) -> str:
         base = re.sub(r"[^A-Za-z0-9]+", "_", s.strip().lower()).strip("_")
         return f"{base}.html" if base else "report.html"
@@ -495,8 +501,27 @@ def write_outputs(
     def _localize(path_str: Optional[str]) -> Optional[str]:
         return path_str if path_str else None
 
+    # Build quick lookup for Chart Studio URLs by chart name/title, if provided
+    cs_urls_by_name: Dict[str, str] = {}
+    combined_url: Optional[str] = None
+    try:
+        if chart_studio_urls:
+            # If only one, likely a combined figure URL
+            if len(chart_studio_urls) == 1:
+                combined_url = chart_studio_urls[0][1]
+            # Map names to URLs for per-chart publishing
+            for name, url in chart_studio_urls:
+                if isinstance(name, str) and isinstance(url, str):
+                    cs_urls_by_name[name] = url
+    except Exception:
+        pass
+
     resolved = []
     for it in report.insights:
+        # Try to match by title for per-chart URL
+        cs_url = cs_urls_by_name.get(it.title)
+        # If we only have a combined URL, attach it under a separate key
+        cs_combined = combined_url
         resolved.append({
             "visualization_id": it.visualization_id,
             "title": it.title,
@@ -509,6 +534,8 @@ def write_outputs(
                 "html_path": _localize(it.references.html_path),
                 "png_path": _localize(it.references.png_path),
                 "svg_path": _localize(it.references.svg_path),
+                **({"chart_studio_url": cs_url} if cs_url else {}),
+                **({"chart_studio_combined_url": cs_combined} if cs_combined else {}),
             }
         })
     resolved_path = out_dir / resolved_name
@@ -523,6 +550,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Standalone HTML Report Composer (Gemini optional)")
     ap.add_argument("--insights", type=Path, required=True, help="Path to Insights JSON")
     ap.add_argument("--asset-dirs", type=str, default="", help="Comma-separated folders to search for charts")
+    ap.add_argument("--charts-yaml", type=Path, default=None, help="Optional path to charts.yaml to source report title")
     ap.add_argument("--asset-map", type=Path, default=None, help="Optional JSON mapping viz_id -> {html_path|png_path|svg_path}")
     ap.add_argument("--out-dir", type=Path, default=Path("./out"), help="Output directory")
     ap.add_argument("--polish", action="store_true", help="Polish text via Gemini (requires GEMINI_API_KEY)")
@@ -535,6 +563,31 @@ def main():
     report = load_report(args.insights, verbose=args.verbose)
     explicit_map = load_asset_map(args.asset_map, verbose=args.verbose)
     asset_dirs = [Path(p.strip()) for p in (args.asset_dirs.split(",") if args.asset_dirs else []) if p.strip()]
+
+    # Prefer report title from charts.yaml if available
+    if yaml is not None and not (report.report_title or "").strip():
+        candidate_paths: List[Path] = []
+        if args.charts_yaml:
+            candidate_paths.append(args.charts_yaml)
+        # Look alongside insights file
+        candidate_paths.append(args.insights.parent / "charts.yaml")
+        # Look in provided asset directories
+        for d in asset_dirs:
+            candidate_paths.append(d / "charts.yaml")
+        # Use the first readable charts.yaml that contains a report_title
+        for p in candidate_paths:
+            try:
+                if p and p.exists():
+                    y = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                    rt = (y.get("report_title") or "").strip()
+                    if rt:
+                        report.report_title = rt
+                        if args.verbose:
+                            print(f"→ Using report_title from {p.resolve()}: {rt}")
+                        break
+            except Exception as e:
+                if args.verbose:
+                    print(f"ⓘ Could not read charts.yaml at {p}: {e}")
 
     report.insights, logs = resolve_assets(report.insights, asset_dirs, explicit_map, verbose=args.verbose)
     for w in logs:
