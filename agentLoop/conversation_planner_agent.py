@@ -16,11 +16,13 @@ import json
 @dataclass
 class ConversationPlan:
     """Result of conversation planning analysis"""
+    user_query: str
     primary_classification: str  # "qualitative" | "quantitative"
     secondary_classification: str  # "Report" | "Chart" | "None"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "user_query": self.user_query,
             "primary_classification": self.primary_classification,
             "secondary_classification": self.secondary_classification,
         }
@@ -173,10 +175,11 @@ class ConversationPlannerAgent:
             
             # Create ConversationPlan object with simplified format
             plan = ConversationPlan(
+                user_query=user_query,
                 primary_classification=parsed_response.get("primary_classification"),
                 secondary_classification=parsed_response.get("secondary_classification")
             )
-            
+            log_step(f"User query: " + user_query, symbol="💬")
             log_step(f"✅ Classification: {plan.primary_classification}" + 
                     (f" → {plan.secondary_classification}" if plan.secondary_classification != "None" else ""),
                     symbol="🎯")
@@ -202,6 +205,7 @@ class ConversationPlannerAgent:
                 fallback_classification = "quantitative"
             
             return ConversationPlan(
+                user_query=user_query,
                 primary_classification=fallback_classification,
                 secondary_classification="None"
             )
@@ -242,6 +246,7 @@ class ConversationPlannerAgent:
                 "success": False,
                 "error": str(e),
                 "output": {
+                    "user_query": input_data.get("user_query", input_data.get("query", "")),
                     "primary_classification": "qualitative",
                     "secondary_classification": "None"
                 }
