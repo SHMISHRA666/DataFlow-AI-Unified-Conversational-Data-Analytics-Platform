@@ -252,8 +252,8 @@ class OrchestrationWorkflow:
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
-        # Persist for all runs
-        self._persist_result("discovery_result.json", orchestration_output)
+        # Persist results per session and use case
+        self._persist_result_per_session(orchestration_output, "discovery", user_request, organization_context)
 
         return orchestration_output
     
@@ -285,8 +285,8 @@ class OrchestrationWorkflow:
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
-        # Persist for all runs
-        self._persist_result("monitoring_result.json", orchestration_output)
+        # Persist results per session and use case
+        self._persist_result_per_session(orchestration_output, "monitoring", user_request, system_context)
 
         return orchestration_output
     
@@ -324,13 +324,75 @@ class OrchestrationWorkflow:
             "orchestration_status": orchestration_output.get("orchestration_summary", {}).get("status", "unknown")
         }
         
-        # Persist for all runs
-        self._persist_result("full_orchestration_result.json", orchestration_output)
+        # Persist results per session and use case
+        self._persist_result_per_session(orchestration_output, "full_orchestration", user_request, 
+                                       {**organization_context, **system_context})
 
         return orchestration_output
 
-    def _persist_result(self, filename: str, data: Dict[str, Any]) -> None:
+    def _persist_result_per_session(self, data: Dict[str, Any], operation_type: str, 
+                                   user_request: str, context: Dict[str, Any]) -> None:
+        """
+        Persist orchestration results in session-based directory structure like intelligence layer.
+        
+        Args:
+            data: Result data to persist
+            operation_type: Type of operation ("discovery", "monitoring", "full_orchestration")
+            user_request: Original user request for filename generation
+            context: Context containing session information
+        """
         try:
-            Path(filename).write_text(json.dumps(data, indent=2), encoding="utf-8")
+            import re
+            from pathlib import Path
+            
+            # Get session_id from context, generate one if not present
+            session_id = context.get("session_id") or context.get("dag_context", {}).get("session_id") or "default_session"
+            
+            # Create session directory
+            session_dir = Path("generated_charts") / str(session_id)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate clean filename from user request
+            if user_request and user_request.strip():
+                # Clean and truncate user request for filename
+                clean_request = re.sub(r'[^\w\s-]', '', user_request.lower())
+                clean_request = re.sub(r'\s+', '_', clean_request.strip())
+                clean_request = clean_request[:50]  # Limit length
+            else:
+                clean_request = "orchestration_request"
+            
+            # Generate timestamped filename
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            filename = f"orchestration_{operation_type}_{clean_request}_{timestamp}.json"
+            
+            # Write result file
+            result_file = session_dir / filename
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+            
+            # Create/update latest symlink
+            latest_symlink = session_dir / f"latest_orchestration_{operation_type}.json"
+            if latest_symlink.exists() or latest_symlink.is_symlink():
+                latest_symlink.unlink()
+            
+            # Create relative symlink
+            try:
+                latest_symlink.symlink_to(filename)
+            except (OSError, NotImplementedError):
+                # Fallback: copy file for systems that don't support symlinks
+                import shutil
+                shutil.copy2(result_file, latest_symlink)
+            
+            log_step(f"💾 Orchestration {operation_type} results saved to: {result_file}")
+            log_step(f"🔗 Latest symlink updated: {latest_symlink}")
+            
         except Exception as e:
-            log_error(f"Failed to write {filename}: {e}")
+            log_error(f"Failed to persist orchestration results: {e}")
+            # Fallback to simple file write in current directory
+            try:
+                fallback_file = f"orchestration_{operation_type}_result.json"
+                with open(fallback_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+                log_step(f"💾 Fallback save: {fallback_file}")
+            except Exception as fallback_error:
+                log_error(f"Even fallback persistence failed: {fallback_error}")

@@ -12,7 +12,10 @@ Inputs (Placeholders):
 
 Context:
 - Consider domain and audience to pick KPIs and visuals that communicate clearly.
-- Prefer columns/features that exist in {analysis_results}. If a referenced column is missing, add to clarifications.
+- CRITICAL: Use ONLY actual column names from {analysis_results}.data_schema.available_columns.
+- NEVER hardcode or assume column names - always use the exact column names from the data schema.
+- NEVER use generic names like "assignee", "inventor", "region", "category" - use the EXACT column names from the schema.
+- If a referenced column is missing, add to clarifications.
 
 Constraints:
 - Use only information present in inputs; no external facts.
@@ -23,11 +26,13 @@ Constraints:
 
 Workflow (internal):
 1) Understand user intent and audience.
-2) Inspect available fields and patterns from {analysis_results}.
-3) Select candidate KPIs with definitions and business rationale.
-4) For each KPI, choose the most effective basic chart; propose advanced only if justified.
-5) Order by impact and readability; validate placeholders.
-6) Assemble final JSON strictly matching the schema.
+2) Extract actual column names from {analysis_results}.data_schema.available_columns.
+3) Inspect available fields and patterns from {analysis_results}.
+4) Select candidate KPIs with definitions and business rationale using ONLY actual column names.
+5) For each KPI, choose the most effective basic chart using ONLY actual column names; propose advanced only if justified.
+6) CRITICAL: When referencing columns in spec.x, spec.y, spec.color, use the EXACT column names from the schema (e.g., "assignee_organization", "inventor_name", not "assignee", "inventor").
+7) Order by impact and readability; validate placeholders.
+8) Assemble final JSON strictly matching the schema.
 
 Output format (return ONLY JSON, no prose, no markdown):
 {
@@ -68,7 +73,7 @@ Example (minimal):
     {"name": "Total Sales", "description": "Sum of sales_amount", "formula": "sum(sales_amount)", "rationale": "Overall revenue", "priority": "high"}
   ],
   "recommended_visualizations": [
-    {"id": "regional_sales_bar", "type": "bar_chart", "data_columns": ["region", "sales_amount"], "title_suggestion": "Sales by Region", "rationale": "Compare regions", "spec": {"x": "region", "y": "sum(sales_amount)", "color": "region", "aggregation": "sum"}}
+    {"id": "regional_sales_bar", "type": "bar_chart", "data_columns": ["sales_region", "sales_amount"], "title_suggestion": "Sales by Region", "rationale": "Compare regions", "spec": {"x": "sales_region", "y": "sum(sales_amount)", "color": "sales_region", "aggregation": "sum"}}
   ],
   "overall_insights": "Regional variance is material.",
   "clarifications_needed": []

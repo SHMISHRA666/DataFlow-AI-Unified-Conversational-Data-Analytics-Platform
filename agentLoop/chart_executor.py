@@ -28,8 +28,11 @@ class ChartExecutor:
         
         # Required packages for visualization
         self.required_packages = [
-            "matplotlib", "plotly", "seaborn", "pandas", "numpy"
+            "matplotlib", "plotly", "seaborn", "pandas", "numpy", "kaleido"
         ]
+        
+        # Check for plotly/kaleido compatibility
+        self._check_plotly_kaleido_compatibility()
 
     def _ensure_subdirs(self) -> None:
         self.output_directory.mkdir(parents=True, exist_ok=True)
@@ -37,6 +40,40 @@ class ChartExecutor:
         (self.output_directory / "svg").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "html").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "pdf").mkdir(parents=True, exist_ok=True)
+    
+    def _check_plotly_kaleido_compatibility(self) -> None:
+        """Check if plotly and kaleido versions are compatible"""
+        try:
+            import plotly
+            plotly_version = plotly.__version__
+            
+            # Try to get kaleido version, but handle cases where it doesn't have __version__
+            try:
+                import kaleido
+                kaleido_version = getattr(kaleido, '__version__', 'unknown')
+            except ImportError:
+                kaleido_version = 'not_installed'
+            
+            # Check for known compatibility issues
+            if plotly_version.startswith("5.") and kaleido_version.startswith("1."):
+                log_error(f"⚠️ Plotly {plotly_version} is not compatible with Kaleido {kaleido_version}")
+                log_error("   PNG/SVG export will use matplotlib fallback")
+                self.plotly_kaleido_compatible = False
+            elif plotly_version.startswith("6.") and kaleido_version in ['1.0.0', 'unknown']:
+                # Plotly 6.x should be compatible with kaleido 1.0.0
+                self.plotly_kaleido_compatible = True
+                log_step(f"✅ Plotly {plotly_version} and Kaleido {kaleido_version} should be compatible", symbol="🔧")
+            else:
+                # Default to compatible for newer versions
+                self.plotly_kaleido_compatible = True
+                log_step(f"✅ Plotly {plotly_version} and Kaleido {kaleido_version} are compatible", symbol="🔧")
+        except ImportError as e:
+            log_error(f"⚠️ Could not check plotly/kaleido compatibility: {e}")
+            self.plotly_kaleido_compatible = False
+        except Exception as e:
+            log_error(f"⚠️ Unexpected error checking plotly/kaleido compatibility: {e}")
+            # Default to compatible to avoid blocking execution
+            self.plotly_kaleido_compatible = True
 
     def set_output_directory(self, new_dir: str | Path) -> None:
         """Update the base output directory (e.g., per-session) and ensure subdirs exist."""
@@ -234,95 +271,13 @@ class ChartExecutor:
             "raise RuntimeError('Unsupported or incomplete data_context; provide one of df_*_path keys')\n"
         )
     
-    def enhance_code_for_execution(self, original_code: str, chart_id: str, data_context: Dict[str, Any], fallback_mode: bool = False) -> str:
+    def enhance_code_for_execution(self, original_code: str, chart_id: str, data_context: Dict[str, Any], viz_spec: Dict[str, Any] | None = None) -> str:
         """Enhance generated code for safe execution and file output"""
         
-        if fallback_mode:
-            # Simple matplotlib-only fallback
-            enhanced_code = f"""
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-import warnings
-warnings.filterwarnings('ignore')
-from pathlib import Path
-
-# Set up output paths
-chart_id = "{chart_id}"
-output_dir = Path(r"{self.output_directory}")
-png_path = output_dir / "png" / f"{{chart_id}}.png"
-svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
-
-# DataFrame loading from pipeline-provided data_context
-{self.build_df_loader_preamble(data_context)}
-
-try:
-    # Generic matplotlib fallbacks using simple heuristics on df
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    datetime_cols = df.select_dtypes(include=['datetime']).columns.tolist()
-    non_numeric_cols = [c for c in df.columns if c not in numeric_cols]
-
-    if "px.bar" in '''{original_code}''':
-        # Bar chart: aggregate first numeric by first non-numeric
-        if not numeric_cols:
-            raise ValueError('No numeric columns available for bar chart fallback')
-        cat_col = non_numeric_cols[0] if non_numeric_cols else df.columns[0]
-        num_col = numeric_cols[0]
-        grouped = df.groupby(cat_col)[num_col].sum().sort_values(ascending=False)
-        plt.figure(figsize=(10, 6))
-        plt.bar(grouped.index.astype(str), grouped.values)
-        plt.title(f'{{num_col}} by {{cat_col}}')
-        plt.xlabel(cat_col)
-        plt.ylabel(num_col)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-    elif "px.line" in '''{original_code}''':
-        # Line chart: plot first numeric over first datetime (or index)
-        if not numeric_cols:
-            raise ValueError('No numeric columns available for line chart fallback')
-        x_col = datetime_cols[0] if datetime_cols else (df.columns[0] if len(df.columns) > 0 else None)
-        y_col = numeric_cols[0]
-        if x_col is None:
-            raise ValueError('No suitable x-axis column for line chart fallback')
-        series = df.sort_values(by=x_col).set_index(x_col)[y_col]
-        plt.figure(figsize=(10, 6))
-        plt.plot(series.index, series.values)
-        plt.title(f'{{y_col}} over {{x_col}}')
-        plt.xlabel(str(x_col))
-        plt.ylabel(y_col)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-    elif "px.pie" in '''{original_code}''':
-        # Pie chart: share of first numeric by first non-numeric
-        if not numeric_cols:
-            raise ValueError('No numeric columns available for pie chart fallback')
-        cat_col = non_numeric_cols[0] if non_numeric_cols else df.columns[0]
-        num_col = numeric_cols[0]
-        grouped = df.groupby(cat_col)[num_col].sum()
-        plt.figure(figsize=(8, 8))
-        plt.pie(grouped.values, labels=grouped.index.astype(str), autopct='%1.1f%%')
-        plt.title(f'{{num_col}} distribution by {{cat_col}}')
-    else:
-        # Try to naively execute original code with matplotlib replacements
-{self._indent_code(original_code.replace("px.", "plt.").replace("fig.", "plt."), 8)}
-    
-    # Save the plot
-    plt.savefig(str(png_path), dpi=300, bbox_inches='tight')
-    plt.savefig(str(svg_path), format='svg', bbox_inches='tight')
-    plt.close('all')
-    
-    print(f"SUCCESS: Chart saved to {{png_path}}")
-    
-except Exception as e:
-    print(f"ERROR: {{str(e)}}")
-    import traceback
-    traceback.print_exc()
-"""
-        else:
-            # Full feature mode with all libraries
-            enhanced_code = f"""
+        # Full feature mode with all libraries - no fallback modes
+        import json  # local import for literal generation
+        _spec_literal = json.dumps(viz_spec or {}, ensure_ascii=False)
+        enhanced_code = """
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -337,58 +292,125 @@ try:
     import plotly.graph_objects as go
     import plotly.io as pio
 except ImportError:
-    print("Plotly not available, using matplotlib fallback")
-    px = None
+    raise ImportError("Plotly is required but not available")
 
 try:
     import seaborn as sns
 except ImportError:
-    print("Seaborn not available")
     sns = None
 
 # Set up output paths
-chart_id = "{chart_id}"
-output_dir = Path(r"{self.output_directory}")
-png_path = output_dir / "png" / f"{{chart_id}}.png"
-svg_path = output_dir / "svg" / f"{{chart_id}}.svg"
-html_path = output_dir / "html" / f"{{chart_id}}.html"
+chart_id = """ + f'"{chart_id}"' + """
+output_dir = Path(r""" + f'"{self.output_directory}"' + """)
+png_path = output_dir / "png" / f"{chart_id}.png"
+svg_path = output_dir / "svg" / f"{chart_id}.svg"
+html_path = output_dir / "html" / f"{chart_id}.html"
 
 # DataFrame loading from pipeline-provided data_context
-{self.build_df_loader_preamble(data_context)}
+""" + self.build_df_loader_preamble(data_context) + """
 
 try:
     # Execute original code
-{self._indent_code(original_code, 4)}
+""" + self._indent_code(original_code, 4) + """
+
+    # Auto-fix: normalize problematic bar charts (y-axis scaling too large)
+    # Heuristics:
+    # - If spec indicates a bar chart with aggregation (especially count)
+    # - Or if color equals x (which creates one trace per category)
+    # Then rebuild figure from an aggregated DataFrame to ensure one bar per category
+    try:
+        import json as __json
+        __spec = __json.loads(r'''__SPEC_LITERAL__''')
+        __ctype = str((__spec or {}).get('type') or '').lower()
+        if 'fig' in locals() and hasattr(fig, 'to_dict') and (__ctype == 'bar' or any(getattr(tr, 'type', '') == 'bar' for tr in getattr(fig, 'data', []) or [])):
+            __x = (__spec or {}).get('x') or (__spec or {}).get('x_column')
+            __y_raw = (__spec or {}).get('y')
+            __agg = str(((__spec or {}).get('aggregation') or (__spec or {}).get('agg') or '')).lower()
+            __color = (__spec or {}).get('color')
+            __needs_fix = False
+            if __x and __agg in ('count','size'):
+                __needs_fix = True
+            if __x and __color and __color == __x:
+                __needs_fix = True
+            # Also detect excessive number of traces (symptom of color==x)
+            if not __needs_fix:
+                try:
+                    __n_traces = len(getattr(fig, 'data', []) or [])
+                    if __n_traces > 20:
+                        __needs_fix = True
+                    
+                except Exception:
+                    pass
+            if __needs_fix and isinstance(df, pd.DataFrame) and __x in df.columns:
+                __y_col = None
+                if isinstance(__y_raw, str) and '(' in __y_raw and ')' in __y_raw:
+                    __y_col = __y_raw.split('(', 1)[1].rsplit(')', 1)[0].strip()
+                elif isinstance(__y_raw, str):
+                    __y_col = __y_raw
+                # Build aggregated frame
+                if (__agg in ('count','size')) or (__y_col is None):
+                    if __y_col and __y_col in df.columns:
+                        __agg_df = df.groupby(__x)[__y_col].count().reset_index(name='value')
+                    else:
+                        __agg_df = df.groupby(__x).size().reset_index(name='value')
+                elif __agg in ('sum','avg','mean','min','max') and __y_col and __y_col in df.columns:
+                    __func = 'mean' if __agg in ('avg','mean') else __agg
+                    __agg_df = df.groupby(__x)[__y_col].agg(__func).reset_index(name='value')
+                else:
+                    # As a safe default, compute counts
+                    __agg_df = df.groupby(__x).size().reset_index(name='value')
+                import plotly.express as __px  # type: ignore
+                fig = __px.bar(__agg_df, x=__x, y='value', title=(__spec or {}).get('title') or None)
+                fig.update_layout(barmode='group')
+                fig.update_yaxes(title=('count' if (__agg in ('count','size') or __y_col is None) else (__y_col or 'value')))
+                del __agg_df
+    except Exception as __autofix_err:
+        # Best-effort; keep original figure if anything fails
+        pass
     
     # Handle different visualization libraries
     if 'fig' in locals():
         # Plotly figure
         if hasattr(fig, 'write_image'):
-            try:
-                fig.write_image(str(png_path), width=800, height=600)
-                fig.write_html(str(html_path))
-                fig.write_image(str(svg_path), format='svg', width=800, height=600)
-            except Exception as e:
-                print(f"Plotly image export failed: {{e}}, saving as HTML only")
-                fig.write_html(str(html_path))
+            # Check if plotly/kaleido are compatible
+            plotly_kaleido_compatible = """ + str(self.plotly_kaleido_compatible) + """
+            
+            if plotly_kaleido_compatible:
+                try:
+                    # Try to export as PNG and SVG
+                    fig.write_image(str(png_path), width=800, height=600)
+                    fig.write_image(str(svg_path), format='svg', width=800, height=600)
+                    fig.write_html(str(html_path))
+                    print(f"SUCCESS: Plotly chart exported to PNG, SVG, and HTML")
+                except Exception as e:
+                    raise RuntimeError(f"Plotly image export failed: {{e}}")
+            else:
+                raise RuntimeError("Plotly/Kaleido versions are incompatible")
         
         # Matplotlib figure
         elif hasattr(fig, 'savefig'):
             fig.savefig(str(png_path), dpi=300, bbox_inches='tight')
             fig.savefig(str(svg_path), format='svg', bbox_inches='tight')
             plt.close(fig)
+            print(f"SUCCESS: Matplotlib chart saved to PNG and SVG")
+        else:
+            raise RuntimeError("Figure object does not have expected save methods")
     
     # Handle matplotlib pyplot
     elif plt.get_fignums():
         plt.savefig(str(png_path), dpi=300, bbox_inches='tight')
         plt.savefig(str(svg_path), format='svg', bbox_inches='tight')
         plt.close('all')
+        print(f"SUCCESS: Matplotlib pyplot chart saved to PNG and SVG")
     
     # Handle seaborn plots
     elif 'ax' in locals() and hasattr(ax, 'figure'):
         ax.figure.savefig(str(png_path), dpi=300, bbox_inches='tight')
         ax.figure.savefig(str(svg_path), format='svg', bbox_inches='tight')
         plt.close(ax.figure)
+        print(f"SUCCESS: Seaborn chart saved to PNG and SVG")
+    else:
+        raise RuntimeError("No valid figure object found to save")
     
     print(f"SUCCESS: Chart saved to {{png_path}}")
     
@@ -396,14 +418,25 @@ except Exception as e:
     print(f"ERROR: {{str(e)}}")
     import traceback
     traceback.print_exc()
+    raise
 """
         
+        # Inject viz spec JSON literal into the embedded code block
+        try:
+            enhanced_code = enhanced_code.replace('__SPEC_LITERAL__', _spec_literal)
+        except Exception:
+            pass
         return enhanced_code
     
     def _indent_code(self, code: str, spaces: int) -> str:
         """Add indentation to code lines"""
         lines = code.split('\n')
-        indented_lines = [' ' * spaces + line if line.strip() else line for line in lines]
+        indented_lines = []
+        for line in lines:
+            if line.strip():  # Only indent non-empty lines
+                indented_lines.append(' ' * spaces + line)
+            else:
+                indented_lines.append(line)  # Keep empty lines as-is
         return '\n'.join(indented_lines)
     
     async def execute_code_safely(self, code: str, chart_id: str) -> Dict[str, Any]:
@@ -425,12 +458,16 @@ except Exception as e:
                 temp_file.write(code)
                 temp_file_path = temp_file.name
             
+            # Add debugging for problematic charts
+            if 'histogram' in chart_id.lower():
+                log_step(f"🔍 Debug: Executing histogram chart {chart_id} with timeout 60s", symbol="⏱️")
+            
             # Execute the code
             result = subprocess.run(
                 [sys.executable, temp_file_path],
                 capture_output=True,
                 text=True,
-                timeout=30  # 30 second timeout
+                timeout=60  # Increased to 60 second timeout
             )
             
             execution_result["execution_time"] = time.time() - start_time
@@ -456,7 +493,15 @@ except Exception as e:
             os.unlink(temp_file_path)
             
         except subprocess.TimeoutExpired:
-            execution_result["errors"].append("Code execution timed out after 30 seconds")
+            error_msg = f"Code execution timed out after 60 seconds for chart {chart_id}"
+            execution_result["errors"].append(error_msg)
+            log_error(f"⏱️ {error_msg}")
+            # Clean up temporary file if it exists
+            try:
+                if 'temp_file_path' in locals():
+                    os.unlink(temp_file_path)
+            except:
+                pass
         except Exception as e:
             execution_result["errors"].append(str(e))
             execution_result["execution_time"] = time.time() - start_time
@@ -498,16 +543,11 @@ except Exception as e:
         if missing:
             log_step(f"Installing missing dependencies: {missing}", symbol="📦")
             if not self.install_missing_dependencies(missing):
-                log_step("⚠️ Package installation failed, trying minimal fallback mode", symbol="🔄")
-                # Try with minimal dependencies that might already be available
-                minimal_deps = self.check_dependencies()
-                if not minimal_deps.get("matplotlib", False):
-                    log_error("❌ Matplotlib not available and installation failed. Cannot create charts.")
-                    execution_summary["execution_status"] = "failed"
-                    execution_summary["error"] = "Required dependencies not available and installation failed"
-                    return execution_summary
-                else:
-                    log_step("✅ Using matplotlib fallback mode", symbol="🎨")
+                error_msg = "❌ Required dependencies not available and installation failed"
+                log_error(error_msg)
+                execution_summary["execution_status"] = "failed"
+                execution_summary["error"] = error_msg
+                return execution_summary
         
         # Validate data context early
         supported_keys = [
@@ -557,18 +597,42 @@ except Exception as e:
                 
                 log_step(f"🎨 Executing chart: {chart_id}", symbol="⚙️")
                 
-                # Check if we need fallback mode
+                # Check dependencies - fail if required packages are missing
                 current_deps = self.check_dependencies()
-                fallback_mode = not all([current_deps.get("plotly", False), current_deps.get("seaborn", False)])
+                missing_deps = [pkg for pkg, available in current_deps.items() if not available]
+                if missing_deps:
+                    error_msg = f"❌ Required dependencies missing for {chart_id}: {missing_deps}"
+                    log_error(error_msg)
+                    raise RuntimeError(error_msg)
                 
-                if fallback_mode:
-                    log_step(f"Using matplotlib fallback mode for {chart_id}", symbol="🔄")
+                # Debug: Show original generated code
+                log_step(f"🔍 Original generated code for {chart_id}:", symbol="📝")
+                for i, line in enumerate(python_code.split('\n')[:20], 1):  # Show first 20 lines
+                    log_step(f"   {i:2d}: {line}", symbol="   ")
                 
                 # Enhance code for execution
-                enhanced_code = self.enhance_code_for_execution(python_code, chart_id, data_context, fallback_mode)
+                viz_spec = rec_by_id.get(chart_id, {}).get("spec", {})
+                enhanced_code = self.enhance_code_for_execution(python_code, chart_id, data_context, viz_spec)
+                
+                # Debug: Show enhanced code
+                log_step(f"🔍 Enhanced code for {chart_id}:", symbol="🔧")
+                for i, line in enumerate(enhanced_code.split('\n')[:30], 1):  # Show first 30 lines
+                    log_step(f"   {i:2d}: {line}", symbol="   ")
                 
                 # Execute code safely
                 exec_result = await self.execute_code_safely(enhanced_code, chart_id)
+                
+                # Debug: Show execution output
+                if exec_result["output"]:
+                    log_step(f"📊 Chart execution output for {chart_id}:", symbol="🔍")
+                    for line in exec_result["output"].split('\n')[:10]:  # Show first 10 lines
+                        if line.strip():
+                            log_step(f"   {line}", symbol="   ")
+                
+                if exec_result["errors"]:
+                    log_error(f"❌ Chart execution errors for {chart_id}:")
+                    for error in exec_result["errors"]:
+                        log_error(f"   {error}")
                 
                 # Record execution details
                 execution_summary["executed_code"].append({
@@ -583,20 +647,42 @@ except Exception as e:
                 })
                 
                 # Process created files
+                chart_info = {
+                    "chart_id": chart_id,
+                    "title": viz.get("title", f"Chart {i+1}"),
+                    "chart_type": viz.get("type", "unknown"),
+                    "generation_time_seconds": exec_result["execution_time"],
+                    "files": {}
+                }
+                
                 for file_info in exec_result["files_created"]:
-                    chart_info = {
-                        "chart_id": chart_id,
-                        "title": viz.get("title", f"Chart {i+1}"),
-                        "chart_type": viz.get("type", "unknown"),
-                        "file_path": file_info["path"],
-                        "file_format": file_info["format"],
-                        "file_size_bytes": file_info["size_bytes"],
-                        "generation_time_seconds": exec_result["execution_time"],
-                        "interactive": file_info["format"] == "html"
+                    chart_info["files"][file_info["format"]] = {
+                        "path": file_info["path"],
+                        "size_bytes": file_info["size_bytes"]
                     }
-                    
-                    execution_summary["charts_created"].append(chart_info)
-                    log_step(f"✅ Created {file_info['format'].upper()}: {file_info['path']}", symbol="📊")
+                    log_step(f"✅ Created {file_info['format'].upper()}: {file_info['path']} ({file_info['size_bytes']} bytes)", symbol="📊")
+                
+                # Debug: Show what files were expected vs created
+                expected_formats = ["png", "svg", "html"]
+                created_formats = [f["format"] for f in exec_result["files_created"]]
+                missing_formats = [f for f in expected_formats if f not in created_formats]
+                
+                if missing_formats:
+                    log_error(f"⚠️ Missing file formats for {chart_id}: {missing_formats}")
+                    log_error(f"   Expected: {expected_formats}")
+                    log_error(f"   Created: {created_formats}")
+                else:
+                    log_step(f"✅ All expected file formats created for {chart_id}: {created_formats}", symbol="🎉")
+                
+                # Note: Individual chart plotly links removed - only complete dashboard link will be generated by export agent
+                
+                # If no files were created, throw an error instead of creating fallbacks
+                if not exec_result["files_created"]:
+                    error_msg = f"❌ Chart execution failed for {chart_id}: No files were created"
+                    log_error(error_msg)
+                    raise RuntimeError(error_msg)
+                
+                execution_summary["charts_created"].append(chart_info)
 
                 # Compute numeric summary for narrative support
                 if df_local is not None:
@@ -635,6 +721,12 @@ except Exception as e:
         log_step(f"🎉 Chart execution completed: {total_created}/{total_requested} charts created", symbol="✅")
         
         return execution_summary
+    
+    def _generate_plotly_link(self, chart_id: str, title: str) -> str:
+        """Generate a plotly.com link for the chart - only for complete dashboard from export agent"""
+        # Individual chart plotly links are not generated here
+        # Only the complete dashboard link will be generated by the export agent
+        return None
 
     def _load_df_from_context(self, data_context: Dict[str, Any]) -> Optional[pd.DataFrame]:
         if not isinstance(data_context, dict):

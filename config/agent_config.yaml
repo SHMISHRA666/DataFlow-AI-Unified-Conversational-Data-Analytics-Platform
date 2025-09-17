@@ -83,3 +83,24 @@ agents:
     prompt_file: "prompts/chart_executor_prompt.txt"
     model: "gemini"
     mcp_servers: []
+
+  # Data Processing Layer Agents for DataFlow AI
+  DataIngestionAgent:
+    prompt_file: "prompts/data_ingestion_prompt.txt"
+    model: "gemini"
+    mcp_servers: []
+
+  DataCleaningAgent:
+    prompt_file: "prompts/data_cleaning_prompt.txt"
+    model: "gemini"
+    mcp_servers: []
+
+  DataTransformationAgent:
+    prompt_file: "prompts/data_transformation_prompt.txt"
+    model: "gemini"
+    mcp_servers: []
+
+  DataAnalysisAgent:
+    prompt_file: "prompts/data_analysis_prompt.txt"
+    model: "gemini"
+    mcp_servers: []

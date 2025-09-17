@@ -8,6 +8,7 @@ from utils.utils import log_step, log_error
 from agentLoop.visualizer import ExecutionVisualizer
 from agentLoop.intelligence_flow import IntelligenceWorkflow
 from agentLoop.orchestration_flow import OrchestrationWorkflow
+from agentLoop.data_processing_flow import DataProcessingWorkflow
 from rich.console import Console
 import pandas as pd
 from dotenv import load_dotenv
@@ -45,6 +46,7 @@ class AgentLoop4:
         self.agent_runner = AgentRunner(multi_mcp)
         self.intelligence_workflow = IntelligenceWorkflow(multi_mcp)
         self.orchestration_workflow = OrchestrationWorkflow(multi_mcp)
+        self.data_processing_workflow = DataProcessingWorkflow(multi_mcp)
 
     async def run(self, query, file_manifest, uploaded_files):
         # Phase 1: File Profiling (if files exist)
@@ -100,6 +102,11 @@ Profile each file separately and return details."""
         )
         
         context.set_multi_mcp(self.multi_mcp)
+        # Ensure downstream exporters can discover dataset paths
+        try:
+            context.plan_graph.graph['file_manifest'] = file_manifest or []
+        except Exception:
+            pass
         
         # Store initial files in output chain
         if file_profiles:
@@ -360,9 +367,13 @@ Profile each file separately and return details."""
             try:
                 # Derive a per-session output directory
                 session_id = business_context.get('session_id')
+                log_step(f"🚀 Calling Export Agent with session_id: {session_id}", symbol="📤")
                 exports = self._run_exports_if_available(result, context=dag_context, session_id=session_id)
                 if exports:
                     result.setdefault("exports", {}).update(exports)
+                    log_step(f"✅ Export Agent completed successfully with {len(exports)} exports", symbol="🎉")
+                else:
+                    log_step("⚠️ Export Agent: No exports generated", symbol="⚠️")
             except Exception as e:
                 log_error(f"Export step skipped due to error: {e}")
 
@@ -386,9 +397,28 @@ Profile each file separately and return details."""
         analysis_data = {}
         business_context = {}
         
-        # Look for analysis results in inputs
+        # Look for analysis results in inputs - prioritize data processing layer output
+        data_context = {}
         for key, value in inputs.items():
-            if 'analysis' in key.lower() or 'data' in key.lower():
+            if 'data_processing' in key.lower() or 'intelligence_layer_ready_data' in key.lower():
+                # Data from Data Processing Layer - extract ready data
+                if isinstance(value, dict) and 'intelligence_layer_ready_data' in value:
+                    analysis_data.update(value['intelligence_layer_ready_data'])
+                    # Extract data_context for chart execution
+                    if 'data_context' in value['intelligence_layer_ready_data']:
+                        data_context.update(value['intelligence_layer_ready_data']['data_context'])
+                    # ✅ Extract session_id from data processing layer
+                    if 'session_id' in value:
+                        business_context['session_id'] = value['session_id']
+                elif isinstance(value, dict):
+                    analysis_data.update(value)
+                    # Extract data_context if present
+                    if 'data_context' in value:
+                        data_context.update(value['data_context'])
+                    # ✅ Extract session_id from data processing layer
+                    if 'session_id' in value:
+                        business_context['session_id'] = value['session_id']
+            elif 'analysis' in key.lower() or 'data' in key.lower():
                 analysis_data.update(value if isinstance(value, dict) else {key: value})
             elif 'context' in key.lower() or 'business' in key.lower():
                 business_context.update(value if isinstance(value, dict) else {key: value})
@@ -401,18 +431,204 @@ Profile each file separately and return details."""
         original_query = context.plan_graph.graph.get('original_query', 'Data analysis request')
         
         # Run intelligence layer
-        # Build data_context from user-provided file manifest so chart execution can load df
-        inferred_data_context = self._build_data_context_from_manifest(context)
+        # Use data_context from Data Processing Layer if available, otherwise infer from manifest
+        if not data_context:
+            data_context = self._build_data_context_from_manifest(context)
 
         result = await self.run_intelligence_layer(
             analysis_data, 
             business_context, 
             original_query,
             dag_context=context,
-            data_context=inferred_data_context
+            data_context=data_context
         )
         
         return result
+
+    async def run_data_processing_layer(self, file_paths, processing_context=None, original_query=None, dag_context=None):
+        """
+        Run the Data Processing Layer workflow for DataFlow AI
+        
+        Args:
+            file_paths: List of file paths to process (CSV, JSON, Excel)
+            processing_context: Processing preferences and configuration
+            original_query: Original user request
+            dag_context: DAG execution context for integration
+            
+        Returns:
+            Data processing outputs ready for Intelligence Layer consumption
+        """
+        try:
+            log_step("🔧 Initiating Data Processing Layer", symbol="🚀")
+            
+            # Prepare processing context
+            if not processing_context:
+                processing_context = {}
+            
+            # Inject session_id for per-session outputs
+            try:
+                sid = dag_context.plan_graph.graph.get('session_id') if dag_context else None
+                if sid:
+                    # enforce numeric only
+                    digits_only = ''.join(ch for ch in str(sid) if ch.isdigit())
+                    processing_context['session_id'] = digits_only or str(int(__import__('time').time()))[-8:]
+                else:
+                    processing_context.setdefault('session_id', str(int(__import__('time').time()))[-8:])
+            except Exception:
+                processing_context.setdefault('session_id', str(int(__import__('time').time()))[-8:])
+            
+            # Use the data processing workflow
+            result = await self.data_processing_workflow.process_files_request(
+                original_query or "Process and analyze uploaded data files",
+                file_paths,
+                processing_context
+            )
+            
+            log_step("✅ Data Processing Layer completed", symbol="🎉")
+            return {"success": True, "output": result}
+            
+        except Exception as e:
+            log_error(f"Data Processing Layer failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _handle_data_processing_step(self, step_id, context):
+        """
+        Handle data processing layer steps in the DAG execution
+        """
+        step_data = context.get_step_data(step_id)
+        
+        # Get inputs from previous steps
+        inputs = context.get_inputs(step_data.get("reads", []))
+        
+        # Extract file paths from inputs or context
+        file_paths = []
+        processing_context = {}
+        
+        # Look for files in various sources
+        if 'file_paths' in inputs:
+            file_paths = inputs['file_paths']
+        elif 'files' in inputs:
+            file_paths = inputs['files']
+        else:
+            # Extract from file manifest
+            file_manifest = context.plan_graph.graph.get('file_manifest', [])
+            file_paths = [item.get('path') for item in file_manifest if item.get('path')]
+        
+        # Extract processing preferences from inputs
+        for key, value in inputs.items():
+            if 'processing' in key.lower() or 'config' in key.lower():
+                if isinstance(value, dict):
+                    processing_context.update(value)
+                else:
+                    processing_context[key] = value
+        
+        # Get original query from context
+        original_query = context.plan_graph.graph.get('original_query', 'Data processing request')
+        
+        # Run data processing layer
+        result = await self.run_data_processing_layer(
+            file_paths, 
+            processing_context, 
+            original_query,
+            dag_context=context
+        )
+        
+        return result
+
+    def _filter_failed_charts_from_guide(self, guide: dict, intelligence_output: dict) -> dict:
+        """Filter out charts that failed to execute from the guide configuration"""
+        if not intelligence_output or "chart_execution" not in intelligence_output:
+            return guide
+        
+        chart_execution = intelligence_output["chart_execution"]
+        if "charts_created" not in chart_execution:
+            return guide
+        
+        # Get list of successfully created charts
+        successful_charts = []
+        for chart_info in chart_execution["charts_created"]:
+            if chart_info.get("files_created"):
+                successful_charts.append(chart_info["chart_id"])
+        
+        # Filter the guide charts to only include successful ones
+        if "charts" in guide:
+            original_charts = guide["charts"]
+            filtered_charts = []
+            
+            for chart in original_charts:
+                # Try to match chart by name or title
+                chart_name = chart.get("name", "")
+                chart_title = chart.get("title", "")
+                
+                # Check if this chart was successfully created
+                is_successful = False
+                for successful_id in successful_charts:
+                    if (successful_id in chart_name.lower().replace(" ", "_") or 
+                        successful_id in chart_title.lower().replace(" ", "_")):
+                        is_successful = True
+                        break
+                
+                if is_successful:
+                    filtered_charts.append(chart)
+                else:
+                    log_step(f"🔍 Export Layer: Filtering out failed chart: {chart_name or chart_title}", symbol="⚠️")
+            
+            guide["charts"] = filtered_charts
+            log_step(f"🔍 Export Layer: Filtered guide from {len(original_charts)} to {len(filtered_charts)} charts", symbol="📊")
+        
+        return guide
+
+    def _modify_guide_for_raw_data(self, guide: dict, intelligence_output: dict) -> dict:
+        """Convert aggregation format to be compatible with export layer"""
+        if not guide or "charts" not in guide:
+            return guide
+        
+        updated_charts = []
+        for chart in guide["charts"]:
+            # Create a copy of the chart
+            updated_chart = chart.copy()
+            
+            # Handle aggregation conversion for export layer compatibility
+            if "agg" in updated_chart:
+                agg_type = updated_chart["agg"]
+                chart_type = updated_chart.get("type")
+                
+                # For count aggregations, convert to proper format
+                if agg_type == "count" and chart_type == "bar":
+                    x_field = updated_chart.get("x", "").replace("$", "")
+                    y_field = updated_chart.get("y", "").replace("$", "")
+                    
+                    # Set up proper aggregation structure
+                    updated_chart["aggregate"] = {
+                        "groupby": [x_field],
+                        "measures": [y_field],  # Use the actual y field for counting (note: plural)
+                        "how": "count"
+                    }
+                    # Remove the simple agg field
+                    del updated_chart["agg"]
+                    # Keep y as the field to be counted
+                    updated_chart["y"] = f"${y_field}"
+                    
+                elif agg_type == "count" and chart_type == "histogram":
+                    # For histograms, remove agg as they don't need aggregation
+                    del updated_chart["agg"]
+                    
+                else:
+                    # For other aggregation types, remove the simple agg
+                    del updated_chart["agg"]
+            
+            # Remove any existing aggregate field to avoid conflicts
+            if "aggregate" in updated_chart and "agg" not in chart:
+                # Keep existing aggregate structure
+                pass
+            
+            updated_charts.append(updated_chart)
+            log_step(f"🔍 Export Layer: Processed chart '{chart.get('title', 'Unknown')}' for export compatibility", symbol="📊")
+        
+        guide["charts"] = updated_charts
+        log_step(f"🔍 Export Layer: Processed {len(updated_charts)} charts for export compatibility", symbol="📊")
+        
+        return guide
 
     def _select_dataset_path_for_export(self, context) -> Path | None:
         """Best-effort dataset path selection for Plotly export.
@@ -458,6 +674,13 @@ Profile each file separately and return details."""
                 load_dotenv()
             except Exception:
                 pass
+            
+            # Debug: Log export layer status
+            log_step(f"🔍 Export Layer Debug - Session ID: {session_id}")
+            log_step(f"🔍 Export Layer Debug - Output Dir: {out_dir}")
+            log_step(f"🔍 Export Layer Debug - Charts YAML exists: {charts_yaml.exists()}")
+            log_step(f"🔍 Export Layer Debug - Insights JSON exists: {insights_json.exists()}")
+            
             if _plotly_build_report and charts_yaml.exists():
                 dataset_path: Path | None = None
                 # If a context is available (DAG step), try to infer from file_manifest
@@ -476,6 +699,21 @@ Profile each file separately and return details."""
                             log_error(f"Failed to read Excel dataset for Plotly export: {e}")
                     guide = _plotly_load_guide(str(charts_yaml)) if _plotly_load_guide else None
                     if df is not None and guide is not None:
+                        # Ensure a unique Chart Studio filename per session/run to avoid overwriting
+                        try:
+                            from datetime import datetime
+                            safe_title = str(guide.get('report_title') or 'plotly-report').replace(' ', '-').lower()
+                            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                            unique_name = f"{safe_title}-{session_id}-{ts}" if session_id else f"{safe_title}-{ts}"
+                            guide['filename'] = unique_name
+                        except Exception:
+                            # Best-effort; if this fails, plotly_v6 will still derive a name
+                            pass
+                        # Filter out failed charts from the guide
+                        guide = self._filter_failed_charts_from_guide(guide, intelligence_output)
+                        # Modify guide to match chart executor's raw data approach
+                        guide = self._modify_guide_for_raw_data(guide, intelligence_output)
+                        log_step(f"🔍 Export Layer: Data loaded ({len(df)} rows), guide loaded", symbol="✅")
                         out_html = str(out_dir / 'plotly_index.html')
                         # Initialize Chart Studio publishing if credentials are available
                         publish_py = None
@@ -504,8 +742,25 @@ Profile each file separately and return details."""
                             publish_col_width_weights=None,
                         )
                         exports['plotly_html_path'] = out_html
+                        
+                        # If no URLs were generated (Chart Studio not available), skip export
+                        if not urls:
+                            log_step("⚠️ Chart Studio not available, skipping plotly export", symbol="🔄")
+                        
                         if urls:
                             exports['chart_studio_urls'] = urls
+                            # ✅ Display complete dashboard plotly link in console
+                            log_step(f"🎉 Export Agent created complete dashboard with {len(urls)} plotly links", symbol="📊")
+                            for name, url in urls:
+                                log_step(f"🌐 Complete Dashboard Plotly Link: {url}", symbol="🔗")
+                            # Mirror the combined URL into the intelligence output so callers always have it
+                            try:
+                                if isinstance(intelligence_output, dict):
+                                    intelligence_output.setdefault('exports', {})['chart_studio_urls'] = urls
+                            except Exception:
+                                pass
+                        else:
+                            log_step("⚠️ Export Agent: No plotly URLs generated", symbol="⚠️")
         except Exception as e:
             log_error(f"Plotly export failed: {e}")
 

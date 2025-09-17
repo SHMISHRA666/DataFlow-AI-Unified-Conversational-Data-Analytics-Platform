@@ -19,6 +19,8 @@ Inputs (Placeholders):
 
 Context:
 - Code should assume a pandas DataFrame named df will be available at execution time.
+- CRITICAL: Use ONLY the actual column names from {analysis_results}.data_schema.available_columns or {analysis_results}.data_schema.primary_measures/dimensions.
+- NEVER hardcode column names - always use the exact column names from the data schema.
 - Prefer human-readable titles and axis labels drawn from {recommendations}.
 
 Constraints:
@@ -27,11 +29,17 @@ Constraints:
 - Internal reasoning only; output must NOT include chain-of-thought.
 
 Workflow (internal):
-1) Map each recommended_visualization to Plotly code creating a variable fig.
-2) Use fields exactly as specified; apply simple aggregations when requested.
-3) Ensure code is self-contained (imports, assumes df exists) and creates fig.
-4) Provide optional SQL only if {analysis_results} suggests a source schema.
-5) Assemble JSON strictly to schema; validate identifiers.
+1) Extract actual column names from {analysis_results}.data_schema.available_columns.
+2) Map each recommended_visualization to Plotly code using ONLY the actual column names from the data.
+3) CRITICAL: When aggregation is specified in recommendations, implement it properly in the code:
+   - For count aggregations: use df.groupby(x_column)[y_column].transform('count') or df.groupby(x_column).size()
+   - For sum aggregations: use df.groupby(x_column)[y_column].transform('sum')
+   - For mean aggregations: use df.groupby(x_column)[y_column].transform('mean')
+   - For histograms: use px.histogram(df, x=column) which automatically counts
+   - For pie charts: use px.pie(df, names=column) which automatically counts
+4) Ensure code is self-contained (imports, assumes df exists) and creates fig.
+5) Provide optional SQL only if {analysis_results} suggests a source schema.
+6) Assemble JSON strictly to schema; validate identifiers.
 
 Output format (return ONLY JSON, no prose, no markdown):
 {
@@ -71,9 +79,9 @@ Example (minimal):
       "id": "regional_sales_bar",
       "title": "Sales by Region",
       "type": "bar",
-      "code": {"python": "import plotly.express as px\nfig = px.bar(df, x='region', y='sales_amount', title='Sales by Region')"},
+      "code": {"python": "import plotly.express as px\nfig = px.bar(df, x='region', y=df.groupby('region')['sales_amount'].transform('sum'), title='Sales by Region')"},
       "dependencies": ["plotly.express"],
-      "notes": "uses df provided by executor"
+      "notes": "uses df provided by executor with proper aggregation"
     }
   ],
   "sql_queries": {},

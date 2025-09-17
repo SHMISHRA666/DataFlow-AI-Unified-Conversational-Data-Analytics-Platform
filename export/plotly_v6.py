@@ -12,6 +12,33 @@ import plotly.express as px
 import plotly.graph_objects as go
 import yaml
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not available, continue without it
+
+# Fix for chart_studio compatibility with plotly 6.3.0
+# The issue is that chart_studio expects plotly.version to have a stable_semver() method
+# but in plotly 6.3.0, version is just a string
+try:
+    import plotly
+    if hasattr(plotly, 'version') and isinstance(plotly.version, str):
+        # Create a mock version object with stable_semver method
+        class MockVersion:
+            def __init__(self, version_string):
+                self.version_string = version_string
+            
+            def stable_semver(self):
+                return self.version_string
+        
+        # Replace the string version with our mock object
+        plotly.version = MockVersion(plotly.version)
+        # print(f"🔧 Fixed plotly version compatibility: {plotly.version.stable_semver()}")
+except Exception as e:
+    print(f"⚠️ Could not fix plotly version compatibility: {e}")
+
 # =========================
 # v5: schema simplification helpers
 # =========================
@@ -359,13 +386,76 @@ def build_bar(df, spec, schema):
     expand_auto_aliases(spec, schema)
     if spec.get("x") is None or spec.get("y") is None: return fallback_table(df, spec, schema)
 
+    # Robust aggregation for count and similar cases to avoid inflated axes and Chart Studio issues
     data = prepare_chart_data(df, spec, schema)
-    color = spec.get("color")
-    if color not in data.columns: color = None
-    barmode = "stack" if spec.get("stack", False) else "group"
+    x_name = spec.get("x")
+    y_name = spec.get("y")
+    agg_conf = spec.get("aggregate") or {}
+    how = str((agg_conf.get("how") if isinstance(agg_conf, dict) else spec.get("agg")) or "").lower()
 
-    fig = px.bar(data, x=spec["x"], y=spec["y"], color=color, barmode=barmode,
+    try:
+        if x_name in data.columns:
+            data = data[data[x_name].notna()].copy()
+        # Determine if we must compute counts from raw rows
+        from pandas.api.types import is_numeric_dtype as _isnum
+        has_y = y_name in data.columns
+        x_has_dupes = x_name in data.columns and (data[x_name].nunique(dropna=False) < len(data))
+        needs_count = (how == "count") and (not has_y or not _isnum(data[y_name]) or x_has_dupes)
+        if needs_count:
+            # Compute one-row-per-category counts
+            if y_name in data.columns:
+                agg_df = data.groupby(x_name, dropna=False)[y_name].count().reset_index(name="value")
+            else:
+                agg_df = data.groupby(x_name, dropna=False).size().reset_index(name="value")
+            agg_df = agg_df.sort_values("value", ascending=False, kind="stable")
+            color = spec.get("color")
+            if color == x_name or color not in agg_df.columns:
+                color = None
+            barmode = "stack" if spec.get("stack", False) else "group"
+            fig = px.bar(agg_df, x=x_name, y="value", color=color, barmode=barmode,
+                         text_auto=spec.get("text_auto", False))
+            fig.update_yaxes(title_text="count")
+            return style_fig(fig, spec)
+        else:
+            # Numeric y with optional sum/avg/min/max OR already-counted values
+            if has_y:
+                data[y_name] = pd.to_numeric(data[y_name], errors="coerce")
+                data = data[data[y_name].notna()]
+            if how in ("sum", "avg", "mean", "min", "max") and has_y:
+                func = "mean" if how in ("avg", "mean") else how
+                agg_df = data.groupby(x_name, dropna=False)[y_name].agg(func).reset_index(name="value")
+                agg_df = agg_df.sort_values("value", ascending=False, kind="stable")
+                color = spec.get("color")
+                if color == x_name or color not in agg_df.columns:
+                    color = None
+                barmode = "stack" if spec.get("stack", False) else "group"
+                fig = px.bar(agg_df, x=x_name, y="value", color=color, barmode=barmode,
+                             text_auto=spec.get("text_auto", False))
+                fig.update_yaxes(title_text=y_name)
+                return style_fig(fig, spec)
+            # No explicit aggregation: just plot cleaned data
+            if has_y and "sort" not in spec:
+                data = data.sort_values(by=y_name, ascending=False, kind="stable")
+            color = spec.get("color")
+            if color not in data.columns:
+                color = None
+            barmode = "stack" if spec.get("stack", False) else "group"
+            fig = px.bar(data, x=x_name, y=y_name if has_y else None, color=color, barmode=barmode,
+                         text_auto=spec.get("text_auto", False))
+            return style_fig(fig, spec)
+    except Exception:
+        pass
+
+    # Fallback: try plotting whatever we have
+    color = spec.get("color") if spec.get("color") in data.columns else None
+    barmode = "stack" if spec.get("stack", False) else "group"
+    fig = px.bar(data, x=x_name, y=y_name, color=color, barmode=barmode,
                  text_auto=spec.get("text_auto", False))
+    # Enforce stable categorical ordering for readability across backends
+    try:
+        fig.update_xaxes(categoryorder="total descending")
+    except Exception:
+        pass
     return style_fig(fig, spec)
 
 def build_scatter(df, spec, schema):
@@ -451,13 +541,25 @@ def build_histogram(df, spec, schema):
     if x not in data.columns:
         return fallback_table(df, spec, schema)
 
+    # ✅ Fix: Robust handling for Chart Studio publishing
+    # - Coerce x to numeric (when possible)
+    # - Drop nulls
+    # - Provide a sensible default bin count
+    try:
+        data[x] = pd.to_numeric(data[x], errors="coerce")
+    except Exception:
+        pass
+    data = data.dropna(subset=[x])
+    if len(data) == 0:
+        return fallback_table(df, spec, schema)
+
     color = spec.get("color") if spec.get("color") in data.columns else None
 
     # Default to count per bin; do not require y
     ycol = spec.get("y") if spec.get("y") in data.columns else None
     histfunc = spec.get("histfunc") or ("count" if ycol is None else "sum")
 
-    nbins = spec.get("nbins")
+    nbins = spec.get("nbins") or 20
     barmode = "relative" if spec.get("stack") else ("overlay" if spec.get("overlay") else None)
 
     fig = px.histogram(data, x=x, y=ycol, color=color, nbins=nbins, histfunc=histfunc, barmode=barmode)
@@ -549,6 +651,11 @@ def init_chart_studio(username: Optional[str], api_key: Optional[str], domain: O
 
     user = username or os.getenv("PLOTLY_USERNAME")
     key = api_key or os.getenv("PLOTLY_API_KEY")
+    
+    # Debug: Print what credentials were found
+    # print(f"🔍 Chart Studio Debug - Username: {user}")
+    # print(f"🔍 Chart Studio Debug - API Key: {'*' * len(key) if key else 'None'}")
+    
     if not (user and key):
         raise RuntimeError("Missing Chart Studio credentials. Provide --cs-username/--cs-api-key or set PLOTLY_USERNAME and PLOTLY_API_KEY.")
 
@@ -559,10 +666,14 @@ def init_chart_studio(username: Optional[str], api_key: Optional[str], domain: O
             plotly_api_domain=domain,
             plotly_streaming_domain=domain
         )
+    print(f"✅ Chart Studio credentials set successfully for user: {user}")
     return py
 
 def publish_cs(py_module, fig: go.Figure, filename: str, sharing: str = "public", auto_open: bool = False) -> str:
-    return py_module.plot(fig, filename=filename, auto_open=auto_open, sharing=sharing)
+    """Publish figure to Chart Studio and return the URL"""
+    url = py_module.plot(fig, filename=filename, auto_open=auto_open, sharing=sharing)
+    print(f"✅ Successfully published to Chart Studio: {url}")
+    return url
 
 # =========================
 # v5 combined subplot builder (copied from v4 with our latest spacing/width features)
@@ -674,6 +785,18 @@ def combine_figures_to_subplots(figs: List[go.Figure],
         ann.font.size = 13 if n > 4 else 15
         ann.yshift = 12 if rows <= 2 else 16
 
+    # Ensure bar/histogram axes are linear and autorange to data; enforce category ordering
+    try:
+        for i, f in enumerate(figs):
+            r, c = i // cols + 1, i % cols + 1
+            has_bar = any(getattr(tr, "type", "") == "bar" for tr in f.data)
+            has_hist = any(getattr(tr, "type", "") == "histogram" for tr in f.data)
+            if has_bar or has_hist:
+                fig_all.update_yaxes(type="linear", autorange=True, row=r, col=c)
+                fig_all.update_xaxes(categoryorder="total descending", row=r, col=c)
+    except Exception:
+        pass
+
     return fig_all
 
 # =========================
@@ -732,6 +855,110 @@ def build_report(df: pd.DataFrame,
     if publish_py is not None and built_figs:
         if publish_combined:
             try:
+                # Build Chart Studio-safe figures directly from df/specs when possible
+                def _cs_fig_from_spec(spec: Dict[str, Any]) -> Optional[go.Figure]:
+                    try:
+                        stype = (spec.get('type') or '').lower()
+                        if stype == 'bar':
+                            x_name = spec.get('x')
+                            y_name = spec.get('y')
+                            how = (spec.get('aggregate') or {}).get('how') or spec.get('agg') or ''
+                            how = str(how).lower()
+                            if x_name and how == 'count':
+                                # Recompute robust counts from raw df
+                                data0 = apply_filters(df, spec.get('filter'))
+                                data0 = data0[data0[x_name].notna()] if x_name in data0.columns else data0
+                                if y_name and y_name in data0.columns:
+                                    counts = data0.groupby(x_name, dropna=False)[y_name].count().reset_index(name='value')
+                                else:
+                                    counts = data0.groupby(x_name, dropna=False).size().reset_index(name='value')
+                                counts = counts.sort_values('value', ascending=False, kind='stable')
+                                figb = px.bar(counts, x=x_name, y='value')
+                                figb.update_yaxes(title_text='count', type='linear', autorange=True)
+                                figb.update_xaxes(categoryorder='total descending')
+                                return figb
+                        if stype == 'histogram':
+                            x = spec.get('x')
+                            if x and x in df.columns:
+                                data0 = apply_filters(df, spec.get('filter'))
+                                vals = pd.to_numeric(data0[x], errors='coerce').dropna().tolist()
+                                nbins = int(spec.get('nbins') or 20)
+                                if len(vals) > 0:
+                                    counts, edges = np.histogram(vals, bins=nbins)
+                                    centers = [(edges[i] + edges[i+1]) / 2.0 for i in range(len(counts))]
+                                    figh = px.bar(x=[str(c) for c in centers], y=[float(c) for c in counts])
+                                    figh.update_yaxes(title_text='count', type='linear', autorange=True)
+                                    return figh
+                        return None
+                    except Exception:
+                        return None
+
+                # Sanitize figures for Chart Studio (avoid typed arrays, enforce simple axes) when we cannot rebuild
+                def _sanitize_for_chart_studio(fig_in: go.Figure) -> go.Figure:
+                    try:
+                        f = go.Figure(fig_in)  # shallow copy is fine here
+                        # Convert histograms to plain bars with precomputed counts
+                        if any(getattr(tr, 'type', '') == 'histogram' for tr in f.data):
+                            # Use the first histogram trace as source
+                            src = next(tr for tr in f.data if getattr(tr, 'type', '') == 'histogram')
+                            x_vals = []
+                            try:
+                                x_vals = [float(v) for v in list(getattr(src, 'x', []) or []) if v is not None]
+                            except Exception:
+                                x_vals = []
+                            nbins = int(getattr(src, 'nbinsx', 20) or 20)
+                            if x_vals:
+                                counts, edges = np.histogram(x_vals, bins=nbins)
+                                centers = [float((edges[i] + edges[i+1]) / 2.0) for i in range(len(counts))]
+                                newf = go.Figure()
+                                newf.add_bar(x=[str(c) for c in centers], y=[float(c) for c in counts])
+                                newf.update_layout(f.layout)
+                                newf.update_yaxes(type='linear', autorange=True)
+                                newf.update_xaxes(categoryorder='array')
+                                return newf
+                        # For bar charts, collapse to one trace with summed values per category
+                        if any(getattr(tr, 'type', '') == 'bar' for tr in f.data):
+                            from collections import defaultdict
+                            acc = defaultdict(float)
+                            for tr in f.data:
+                                if getattr(tr, 'type', '') != 'bar':
+                                    continue
+                                x_list = list(getattr(tr, 'x', []) or [])
+                                y_list = list(getattr(tr, 'y', []) or [])
+                                for xv, yv in zip(x_list, y_list):
+                                    try:
+                                        yv = float(yv)
+                                    except Exception:
+                                        continue
+                                    key = str(xv) if xv is not None else ''
+                                    acc[key] += yv
+                            if acc:
+                                xs = sorted(acc.keys(), key=lambda k: -acc[k])
+                                ys = [float(acc[k]) for k in xs]
+                                newf = go.Figure()
+                                newf.add_bar(x=xs, y=ys)
+                                newf.update_layout(f.layout)
+                                newf.update_yaxes(type='linear', autorange=True)
+                                newf.update_xaxes(categoryorder='total descending')
+                                return newf
+                        # Generic sanitization: force plain lists
+                        for tr in f.data:
+                            if hasattr(tr, 'x') and getattr(tr, 'x', None) is not None:
+                                try:
+                                    tr.x = [str(v) if v is not None else None for v in list(tr.x)]
+                                except Exception:
+                                    pass
+                            if hasattr(tr, 'y') and getattr(tr, 'y', None) is not None:
+                                try:
+                                    tr.y = [float(v) if v is not None else None for v in list(tr.y)]
+                                except Exception:
+                                    pass
+                        f.update_yaxes(type='linear', autorange=True)
+                        f.update_xaxes(categoryorder='total descending')
+                        return f
+                    except Exception:
+                        return fig_in
+
                 n = len(built_figs)
                 cols = publish_cols
                 if publish_auto_layout:
@@ -782,8 +1009,14 @@ def build_report(df: pd.DataFrame,
                             col_weight_est[c] = max(col_weight_est[c], w)
                         col_width_weights = col_weight_est
 
+                # Prefer rebuilding CS-safe figures per spec when possible
+                cs_figs: List[go.Figure] = []
+                for spec, f in zip(charts, built_figs):
+                    rebuilt = _cs_fig_from_spec(spec)
+                    cs_figs.append(rebuilt if rebuilt is not None else _sanitize_for_chart_studio(f))
+                sanitized_figs = cs_figs
                 combo = combine_figures_to_subplots(
-                    built_figs, built_names,
+                    sanitized_figs, built_names,
                     cols=cols,
                     title=title,
                     height_per_row=base_row_h,

@@ -513,6 +513,13 @@ def write_outputs(
             for name, url in chart_studio_urls:
                 if isinstance(name, str) and isinstance(url, str):
                     cs_urls_by_name[name] = url
+        # Also accept a pre-attached combined URL in report metadata
+        if not combined_url:
+            try:
+                # when compose is called with report already attached to 'exports'
+                pass
+            except Exception:
+                pass
     except Exception:
         pass
 

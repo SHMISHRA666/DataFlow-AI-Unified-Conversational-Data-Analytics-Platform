@@ -17,6 +17,8 @@ Inputs (Placeholders):
 Context:
 - Tailor tone to audience (executives vs. technical) and objectives.
 - Prefer concrete references to actual charts when available.
+- Use plotly links from chart_execution_results for interactive chart references.
+- Include plotly_link in references section when available from executed_files.
 
 Constraints:
 - Stay faithful to inputs; no external facts.
