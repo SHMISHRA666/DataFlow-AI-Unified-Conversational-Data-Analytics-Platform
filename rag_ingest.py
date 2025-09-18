@@ -3,7 +3,7 @@ rag_ingest.py
 Single-file RAG ingestion pipeline:
 - Extract PDF -> markdown using pymupdf4llm (write_images=True)
 - For each image, try OCR (pytesseract) to produce a caption
-- If OCR fails, fallback to Gemini multimodal (if --use_gemini is enabled and GOOGLE_API_KEY is set)
+- If OCR fails, fallback to Gemini multimodal (if --use_gemini is enabled and GOOGLE_API_KEY is set OR we have made the gemini enabled by default if Goofle API key is set)
 - Replace image links with "**Image:** <caption>"
 - Chunk text, get embeddings via embedding endpoint (nomic-embed-text)
 - Build FAISS index and save metadata JSON
@@ -121,7 +121,8 @@ def caption_image(image_path: Path, use_gemini: bool = False) -> str:
         return text
 
     # 2) Gemini fallback
-    if use_gemini and os.getenv("GOOGLE_API_KEY"):
+    # if use_gemini and os.getenv("GOOGLE_API_KEY"):   ##Enable it to specifically use gemini for image with no text in it
+    if os.getenv("GOOGLE_API_KEY"):                    ##If Gemini API key is configure, then the solution will use it.
         try:
             file_obj = genai.upload_file(path=str(image_path))
             model = genai.GenerativeModel("gemini-2.0-flash")
@@ -349,8 +350,8 @@ def main():
     parser = argparse.ArgumentParser(description="RAG ingest/search/chat")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    ing = sub.add_parser("ingest", help="Process docs and build FAISS index")
-    ing.add_argument("--use_gemini", action="store_true", help="Enable Gemini fallback for image captioning")
+    ing = sub.add_parser("ingest", help="Process docs and build FAISS index") ##Commenting this line and below as use_gemini was commented out above on line 124 and use_gemini ain't required
+    # ing.add_argument("--use_gemini", action="store_true", help="Enable Gemini fallback for image captioning")
 
     s = sub.add_parser("search", help="Search the FAISS index")
     s.add_argument("q", nargs="+", help="Query text to search")
@@ -361,7 +362,8 @@ def main():
     args = parser.parse_args()
 
     if args.cmd == "ingest":
-        process_documents(rebuild_index=True, use_gemini=args.use_gemini)
+        # process_documents(rebuild_index=True, use_gemini=args.use_gemini). ##Commenting as use_gemini was commented out above on line 124 and use_gemini ain't required
+        process_documents(rebuild_index=True)
 
     elif args.cmd == "search":
         query = " ".join(args.q)
