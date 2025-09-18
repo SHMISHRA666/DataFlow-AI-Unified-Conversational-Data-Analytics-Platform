@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
 """
 rag_ingest.py
 Single-file RAG ingestion pipeline:
 - Extract PDF -> markdown using pymupdf4llm (write_images=True)
-- For each image, call a multimodal model (gemma3:12b / local Ollama) to produce a caption
+- For each image, try OCR (pytesseract) to produce a caption
+- If OCR fails, fallback to Gemini multimodal (if --use_gemini is enabled and GOOGLE_API_KEY is set)
 - Replace image links with "**Image:** <caption>"
-- Chunk text, get embeddings via an embedding endpoint (nomic-embed-text)
+- Chunk text, get embeddings via embedding endpoint (nomic-embed-text)
 - Build FAISS index and save metadata JSON
 - Simple search + chat with Gemini CLI
 """
@@ -24,7 +24,7 @@ import requests
 import numpy as np
 
 from dotenv import load_dotenv
-load_dotenv() 
+load_dotenv()
 
 # --- Optional imports ---
 try:
@@ -37,13 +37,10 @@ try:
 except Exception as e:
     raise ImportError("pymupdf4llm is required. pip install pymupdf4llm") from e
 
-# ---- Config (override with env vars) ----
+# ---- Config ----
 DOCS_DIR = Path(os.getenv("DOCS_DIR", "./documents"))
 IMAGES_DIR_NAME = "images"
 FAISS_DIR = Path(os.getenv("FAISS_DIR", "./faiss_index"))
-GEMMA_API_URL = os.getenv("GEMMA_API_URL", "http://localhost:11434/api/generate")
-GEMMA_API_KEY = os.getenv("GEMMA_API_KEY", "")
-GEMMA_MODEL = os.getenv("GEMMA_MODEL", "gemma3:12b")
 
 EMBED_API_URL = os.getenv("EMBED_API_URL", "http://localhost:11434/api/embeddings")
 EMBED_API_KEY = os.getenv("EMBED_API_KEY", "")
@@ -91,38 +88,51 @@ def pdf_to_markdown(pdf_path: Path, images_outdir: Path) -> str:
     return md or ""
 
 
-# ---- 2) Caption image via GEMMA ----
-def caption_image(image_path: Path) -> str:
+# ---- 2) Caption image (OCR -> Gemini fallback) ----
+def caption_image(image_path: Path, use_gemini: bool = False) -> str:
     log(f"Captioning image: {image_path.name}")
-    raw = image_path.read_bytes()
-    b64 = base64.b64encode(raw).decode("utf-8")
-
-    payload = {
-        "model": GEMMA_MODEL,
-        "prompt": (
-            "If there is lots of text in the image, reply ONLY with the exact text. "
-            "Otherwise, describe the image contents succinctly (alt-text style). "
-            "Return NO extra commentary."
-        ),
-        "images": [b64]
-    }
-    headers = {}
-    if GEMMA_API_KEY:
-        headers["Authorization"] = f"Bearer {GEMMA_API_KEY}"
-
     try:
-        r = requests.post(GEMMA_API_URL, json=payload, headers=headers, timeout=60)
-        r.raise_for_status()
-        data = r.json()
-        caption = ""
-        if isinstance(data, dict):
-            caption = data.get("response") or \
-                      (data.get("message") or {}).get("content") or \
-                      (data.get("choices") and data["choices"][0].get("message", {}).get("content"))
-        if caption:
-            return caption.strip()
-    except Exception:
-        pass
+        raw = image_path.read_bytes()
+    except Exception as e:
+        return f"[Could not read image {image_path.name}: {e}]"
+
+    # ---- OCR with preprocessing ----
+    def ocr_with_preprocessing(img_path: Path) -> str:
+        try:
+            from PIL import Image, ImageOps, ImageEnhance
+            import pytesseract
+
+            img = Image.open(img_path)
+            img = ImageOps.grayscale(img)
+            img = ImageEnhance.Contrast(img).enhance(2.0)
+            img = img.point(lambda x: 0 if x < 128 else 255, "1")
+
+            text = pytesseract.image_to_string(img).strip()
+            if text:
+                return " ".join(text.split())
+        except Exception as e:
+            log(f"OCR preprocessing failed: {e}")
+        return ""
+
+    # 1) Try OCR first
+    text = ocr_with_preprocessing(image_path)
+    if text:
+        log(f"OCR text extracted (len={len(text)}).")
+        return text
+
+    # 2) Gemini fallback
+    if use_gemini and os.getenv("GOOGLE_API_KEY"):
+        try:
+            file_obj = genai.upload_file(path=str(image_path))
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content([
+                "If there is text in this image, transcribe it exactly. "
+                "Otherwise, describe the image in one concise sentence.",
+                file_obj
+            ])
+            return response.text.strip()
+        except Exception as e:
+            log(f"Gemini captioning failed: {e}")
 
     return f"[Could not caption image {image_path.name}]"
 
@@ -144,10 +154,6 @@ def replace_images_with_captions(markdown: str, images_dir: Path) -> str:
 
         try:
             caption = caption_image(src_path)
-            try:
-                src_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             return f"**Image:** {caption}"
         except Exception as e:
             log(f"Warning: failed to caption {src}: {e}")
@@ -206,104 +212,114 @@ def build_and_save_faiss(embeddings: List[np.ndarray], metadata: List[Dict[str, 
 
 
 # ---- 7) Ingest ----
-# def process_documents(rebuild_index: bool = True):
-#     pdf_files = sorted(DOCS_DIR.glob("*.pdf"))
-#     if not pdf_files:
-#         log("No PDF files found in documents/.")
-#         return
+from bs4 import BeautifulSoup   # pip install beautifulsoup4
 
-#     embeddings, metadata = [], []
-
-#     for pdf in pdf_files:
-#         log(f"Processing {pdf.name}")
-#         md = pdf_to_markdown(pdf, IMAGES_DIR)
-#         if not md.strip():
-#             log(f"No text extracted from {pdf.name}, skipping.")
-#             continue
-#         md = replace_images_with_captions(md, IMAGES_DIR)
-#         chunks = chunk_text(md)
-
-#         for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {pdf.name}")):
-#             try:
-#                 emb = get_embedding(chunk)
-#             except Exception as e:
-#                 log(f"Failed to embed chunk {i} of {pdf.name}: {e}")
-#                 continue
-#             embeddings.append(emb)
-#             metadata.append({
-#                 "doc": pdf.name,
-#                 "chunk_id": f"{pdf.stem}_{i}",
-#                 "chunk": chunk[:2000]
-#             })
-
-#     if embeddings:
-#         build_and_save_faiss(embeddings, metadata, FAISS_DIR)
-#     else:
-#         log("No embeddings were created.")
-
-
-def process_documents(rebuild_index: bool = True):
+def process_documents(rebuild_index: bool = True, use_gemini: bool = False, keep_images: bool = False):
     pdf_files = sorted(DOCS_DIR.glob("*.pdf"))
     json_files = sorted(DOCS_DIR.glob("*.json"))
-    if not pdf_files and not json_files:
-        log("No PDF or JSON files found in documents/.")
+    html_files = sorted(DOCS_DIR.glob("*.html"))
+    image_files = []
+    for ext in ["*.png", "*.jpg", "*.jpeg", "*.svg"]:
+        image_files.extend(sorted(DOCS_DIR.glob(ext)))
+
+    if not pdf_files and not json_files and not html_files and not image_files:
+        log("No supported files found in documents/.")
         return
 
     embeddings, metadata = [], []
 
-    # --- Handle PDFs ---
+    # --- PDFs ---
     for pdf in pdf_files:
         log(f"Processing PDF {pdf.name}")
         md = pdf_to_markdown(pdf, IMAGES_DIR)
         if not md.strip():
-            log(f"No text extracted from {pdf.name}, skipping.")
             continue
         md = replace_images_with_captions(md, IMAGES_DIR)
-        chunks = chunk_text(md)
-
-        for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {pdf.name}")):
+        for i, chunk in enumerate(chunk_text(md)):
             try:
                 emb = get_embedding(chunk)
+                embeddings.append(emb)
+                metadata.append({"doc": pdf.name, "chunk_id": f"{pdf.stem}_{i}", "chunk": chunk[:2000]})
             except Exception as e:
                 log(f"Failed to embed chunk {i} of {pdf.name}: {e}")
-                continue
-            embeddings.append(emb)
-            metadata.append({
-                "doc": pdf.name,
-                "chunk_id": f"{pdf.stem}_{i}",
-                "chunk": chunk[:2000]
-            })
 
-    # --- Handle JSON ---
+    # --- JSON ---
     for js in json_files:
         log(f"Processing JSON {js.name}")
         try:
             data = json.loads(js.read_text())
-            md = json.dumps(data, indent=2, ensure_ascii=False)  # pretty text
+            md = json.dumps(data, indent=2, ensure_ascii=False)
         except Exception as e:
             log(f"Failed to parse {js.name}: {e}")
             continue
-        chunks = chunk_text(md)
-
-        for i, chunk in enumerate(tqdm(chunks, desc=f"Embedding chunks for {js.name}")):
+        for i, chunk in enumerate(chunk_text(md)):
             try:
                 emb = get_embedding(chunk)
+                embeddings.append(emb)
+                metadata.append({"doc": js.name, "chunk_id": f"{js.stem}_{i}", "chunk": chunk[:2000]})
             except Exception as e:
                 log(f"Failed to embed chunk {i} of {js.name}: {e}")
+
+    # # --- HTML ---
+    import tempfile
+    from playwright.sync_api import sync_playwright
+    for html in html_files:
+        log(f"Processing HTML {html.name}")
+        md = ""
+        try:
+            soup = BeautifulSoup(html.read_text(), "html.parser")
+            for tag in soup(["script", "style"]): tag.extract()
+            md = soup.get_text(separator="\n", strip=True)
+            if not md.strip():
+                with tempfile.NamedTemporaryFile(suffix=".png", dir=str(IMAGES_DIR), delete=False) as tmp_img:
+                    tmp_img_path = Path(tmp_img.name)
+                try:
+                    with sync_playwright() as p:
+                        browser = p.chromium.launch()
+                        page = browser.new_page()
+                        page.goto(f"file://{html.resolve()}")
+                        page.screenshot(path=str(tmp_img_path), full_page=True)
+                        browser.close()
+                    caption = caption_image(tmp_img_path, use_gemini=use_gemini)
+                    md = caption
+                    if not keep_images: tmp_img_path.unlink(missing_ok=True)
+                except Exception as e:
+                    log(f"Screenshot failed: {e}")
+                    continue
+        except Exception as e:
+            log(f"Failed to parse {html.name}: {e}")
+            continue
+        if not md.strip():
+            continue
+        for i, chunk in enumerate(chunk_text(md)):
+            try:
+                emb = get_embedding(chunk)
+                embeddings.append(emb)
+                metadata.append({"doc": html.name, "chunk_id": f"{html.stem}_{i}", "chunk": chunk[:2000]})
+            except Exception as e:
+                log(f"Failed to embed chunk {i} of {html.name}: {e}")
+
+    
+    # --- Images ---
+    for img in image_files:
+        log(f"Processing Image {img.name}")
+        try:
+            caption = caption_image(img, use_gemini=use_gemini)
+            if not caption or caption.startswith("[Could not caption"):
                 continue
-            embeddings.append(emb)
-            metadata.append({
-                "doc": js.name,
-                "chunk_id": f"{js.stem}_{i}",
-                "chunk": chunk[:2000]
-            })
+            for i, chunk in enumerate(chunk_text(caption)):
+                emb = get_embedding(chunk)
+                embeddings.append(emb)
+                metadata.append({"doc": img.name, "chunk_id": f"{img.stem}_{i}", "chunk": chunk[:2000]})
+            if not keep_images:
+                img.unlink(missing_ok=True)
+        except Exception as e:
+            log(f"Failed to process image {img.name}: {e}")
 
     if embeddings:
         build_and_save_faiss(embeddings, metadata, FAISS_DIR)
     else:
         log("No embeddings were created.")
-
-
 
 
 # ---- 8) Search ----
@@ -322,8 +338,7 @@ def search(query: str, k: int = TOP_K):
     D, I = index.search(q_emb, k)
     results = []
     for dist, idx in zip(D[0], I[0]):
-        if idx < 0:
-            continue
+        if idx < 0: continue
         md = metadata[idx]
         results.append({"score": float(dist), "doc": md.get("doc"), "chunk_id": md.get("chunk_id"), "chunk": md.get("chunk")})
     return results
@@ -334,7 +349,8 @@ def main():
     parser = argparse.ArgumentParser(description="RAG ingest/search/chat")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("ingest", help="Process PDFs and build FAISS index")
+    ing = sub.add_parser("ingest", help="Process docs and build FAISS index")
+    ing.add_argument("--use_gemini", action="store_true", help="Enable Gemini fallback for image captioning")
 
     s = sub.add_parser("search", help="Search the FAISS index")
     s.add_argument("q", nargs="+", help="Query text to search")
@@ -345,7 +361,7 @@ def main():
     args = parser.parse_args()
 
     if args.cmd == "ingest":
-        process_documents(rebuild_index=True)
+        process_documents(rebuild_index=True, use_gemini=args.use_gemini)
 
     elif args.cmd == "search":
         query = " ".join(args.q)
