@@ -2,13 +2,9 @@
 
 from utils.utils import log_step, log_error
 import asyncio
-import yaml
 from dotenv import load_dotenv
-from mcp_servers.multiMCP import MultiMCP
 from agentLoop.flow import AgentLoop4
-from agentLoop.output_analyzer import analyze_results
 from pathlib import Path
-from pprint import pprint
 
 BANNER = """
 ──────────────────────────────────────────────────────
@@ -17,18 +13,6 @@ Files first, then your question.
 Type 'exit' or 'quit' to leave.
 ──────────────────────────────────────────────────────
 """
-
-def load_server_configs():
-    """Load MCP server configurations from YAML file"""
-    config_path = Path("config/mcp_server_config.yaml")
-    if not config_path.exists():
-        log_error(f"MCP server config not found: {config_path}")
-        return []
-    
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
-    
-    return config.get("mcp_servers", [])
 
 def get_file_input():
     """Get file paths from user"""
@@ -71,14 +55,9 @@ async def main():
     load_dotenv()
     print(BANNER)
     
-    # 🔧 FIX: Load server configs and initialize MultiMCP properly
-    log_step("📥 Loading MCP Servers...")
-    server_configs = load_server_configs()
-    multi_mcp = MultiMCP(server_configs)  # ✅ Pass server_configs
-    await multi_mcp.initialize()          # ✅ Use initialize() not start()
-    
-    # Initialize AgentLoop4
-    agent_loop = AgentLoop4(multi_mcp)
+    # Initialize AgentLoop4 without MCP layer
+    log_step("🚀 Initializing DataFlow AI")
+    agent_loop = AgentLoop4(None)
     
     while True:
         try:
@@ -94,9 +73,9 @@ async def main():
             log_step("🔄 Processing with AgentLoop4...")
             execution_context = await agent_loop.run(query, file_manifest, uploaded_files)
             
-            # Analyze results directly from NetworkX graph
+            # Minimal completion message
             print("\n" + "="*60)
-            analyze_results(execution_context)
+            print("✅ DataFlow AI completed.")
             print("="*60)
             
             print("\n😴 Agent Resting now")
@@ -113,7 +92,7 @@ async def main():
         if cont.lower() in ['exit', 'quit']:
             break
 
-    await multi_mcp.shutdown()
+    # No MCP shutdown required
 
 if __name__ == "__main__":
     asyncio.run(main())

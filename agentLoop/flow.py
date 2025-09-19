@@ -1,15 +1,10 @@
 # flow.py – SIMPLIFIED Output Chain System
-
-import networkx as nx
-import asyncio
 from agentLoop.contextManager import ExecutionContextManager
 from agentLoop.agents import AgentRunner
 from utils.utils import log_step, log_error
-from agentLoop.visualizer import ExecutionVisualizer
 from agentLoop.intelligence_flow import IntelligenceWorkflow
 from agentLoop.orchestration_flow import OrchestrationWorkflow
 from agentLoop.data_processing_flow import DataProcessingWorkflow
-from rich.console import Console
 import pandas as pd
 from dotenv import load_dotenv
 from pathlib import Path
@@ -49,49 +44,35 @@ class AgentLoop4:
         self.data_processing_workflow = DataProcessingWorkflow(multi_mcp)
 
     async def run(self, query, file_manifest, uploaded_files):
-        # Phase 1: File Profiling (if files exist)
-        file_profiles = {}
+        # Build a default plan graph without Planner/Distiller
+        nodes = []
+        edges = []
         if uploaded_files:
-            file_list_text = "\n".join([f"- File {i+1}: {Path(f).name} (full path: {f})" 
-                                       for i, f in enumerate(uploaded_files)])
-            
-            grounded_instruction = f"""Profile and summarize each file's structure, columns, content type.
+            nodes.append({
+                "id": "data_processing",
+                "description": "Process uploaded files and prepare analysis-ready data",
+                "agent": "DataProcessingLayer",
+                "reads": [],
+                "writes": ["intelligence_layer_ready_data"]
+            })
+            nodes.append({
+                "id": "intelligence",
+                "description": "Generate recommendations, charts and narratives",
+                "agent": "IntelligenceLayer",
+                "reads": ["data_processing"],
+                "writes": ["intelligence_output"]
+            })
+            edges.append({"source": "data_processing", "target": "intelligence"})
+        else:
+            nodes.append({
+                "id": "intelligence",
+                "description": "Analyze context and generate charts/narratives",
+                "agent": "IntelligenceLayer",
+                "reads": [],
+                "writes": ["intelligence_output"]
+            })
 
-IMPORTANT: Use these EXACT file names in your response:
-{file_list_text}
-
-Profile each file separately and return details."""
-
-            file_result = await self.agent_runner.run_agent(
-                "DistillerAgent",
-                {
-                    "task": "profile_files",
-                    "files": uploaded_files,
-                    "instruction": grounded_instruction,
-                    "writes": ["file_profiles"]
-                }
-            )
-            if file_result["success"]:
-                file_profiles = file_result["output"]
-
-        # Phase 2: Planning
-        plan_result = await self.agent_runner.run_agent(
-            "PlannerAgent",
-            {
-                "original_query": query,
-                "planning_strategy": self.strategy,
-                "file_manifest": file_manifest,
-                "file_profiles": file_profiles
-            }
-        )
-
-        if not plan_result["success"]:
-            raise RuntimeError(f"Planning failed: {plan_result['error']}")
-
-        if 'plan_graph' not in plan_result['output']:
-            raise RuntimeError(f"PlannerAgent output missing 'plan_graph' key")
-        
-        plan_graph = plan_result["output"]["plan_graph"]
+        plan_graph = {"nodes": nodes, "edges": edges}
 
         # Phase 3: Simple Output Chain Execution
         context = ExecutionContextManager(
@@ -104,73 +85,60 @@ Profile each file separately and return details."""
         context.set_multi_mcp(self.multi_mcp)
         # Ensure downstream exporters can discover dataset paths
         try:
-            context.plan_graph.graph['file_manifest'] = file_manifest or []
+            context.plan_graph['graph']['file_manifest'] = file_manifest or []
         except Exception:
             pass
         
         # Store initial files in output chain
-        if file_profiles:
-            context.plan_graph.graph['output_chain']['file_profiles'] = file_profiles
 
         # Store uploaded files directly
         for file_info in file_manifest:
-            context.plan_graph.graph['output_chain'][file_info['name']] = file_info['path']
+            context.plan_graph['graph']['output_chain'][file_info['name']] = file_info['path']
 
-        # Phase 4: Execute with simple output chaining
-        await self._execute_dag(context)
+        # Phase 4: Execute sequentially (no DAG scheduler)
+        step_order = []
+        if any(n.get("id") == "data_processing" for n in plan_graph.get("nodes", [])):
+            step_order.append("data_processing")
+        if any(n.get("id") == "intelligence" for n in plan_graph.get("nodes", [])):
+            step_order.append("intelligence")
+
+        for step_id in step_order:
+            try:
+                context.mark_running(step_id)
+                if step_id == "data_processing":
+                    result = await self._handle_data_processing_step(step_id, context)
+                elif step_id == "intelligence":
+                    result = await self._handle_intelligence_step(step_id, context)
+                else:
+                    # Fallback to generic agent execution
+                    result = await self._execute_step(step_id, context)
+
+                if isinstance(result, Exception):
+                    context.mark_failed(step_id, str(result))
+                elif result.get("success"):
+                    await context.mark_done(step_id, result["output"])
+                else:
+                    context.mark_failed(step_id, result.get("error"))
+            except Exception as e:
+                context.mark_failed(step_id, str(e))
+
         return context
 
     async def _execute_dag(self, context):
-        """Execute DAG with simple output chaining"""
-        visualizer = ExecutionVisualizer(context)
-        console = Console()
-        
-        MAX_CONCURRENT_AGENTS = 4
-        max_iterations = 20
-        iteration = 0
-
-        while not context.all_done() and iteration < max_iterations:
-            iteration += 1
-            console.print(visualizer.get_layout())
-            
-            ready_steps = context.get_ready_steps()
-            if not ready_steps:
-                if any(context.plan_graph.nodes[n]['status'] == 'failed' 
-                       for n in context.plan_graph.nodes):
-                    break
-                await asyncio.sleep(0.3)
-                continue
-
-            # Rate limiting
-            batch_size = min(len(ready_steps), MAX_CONCURRENT_AGENTS)
-            current_batch = ready_steps[:batch_size]
-            
-            print(f"🚀 Executing batch: {current_batch}")
-
-            # Mark running
-            for step_id in current_batch:
-                context.mark_running(step_id)
-            
-            # Execute batch
-            tasks = [self._execute_step(step_id, context) for step_id in current_batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # Process results - SIMPLE!
-            for step_id, result in zip(current_batch, results):
-                if isinstance(result, Exception):
-                    context.mark_failed(step_id, str(result))
-                elif result["success"]:
-                    await context.mark_done(step_id, result["output"])
-                else:
-                    context.mark_failed(step_id, result["error"])
-
-            if len(ready_steps) > batch_size:
-                await asyncio.sleep(5)
-
+        """DAG execution disabled in sequential mode."""
+        return
     async def _execute_step(self, step_id, context):
         """SIMPLE: Execute step with direct output passing and code execution"""
         step_data = context.get_step_data(step_id)
         agent_type = step_data["agent"]
+        
+        # Handle special workflow steps directly
+        if agent_type == "DataProcessingLayer":
+            return await self._handle_data_processing_step(step_id, context)
+        if agent_type == "IntelligenceLayer":
+            return await self._handle_intelligence_step(step_id, context)
+        if agent_type == "OrchestrationLayer":
+            return await self._handle_orchestration_step(step_id, context)
         
         # SIMPLE: Get raw outputs from previous steps
         inputs = context.get_inputs(step_data.get("reads", []))
@@ -183,10 +151,10 @@ Profile each file separately and return details."""
                 "reads": step_data.get("reads", []),
                 "writes": step_data.get("writes", []),
                 "inputs": inputs,  # Direct output passing!
-                "original_query": context.plan_graph.graph['original_query'],
+                "original_query": context.plan_graph['graph']['original_query'],
                 "session_context": {
-                    "session_id": context.plan_graph.graph['session_id'],
-                    "file_manifest": context.plan_graph.graph['file_manifest']
+                    "session_id": context.plan_graph['graph']['session_id'],
+                    "file_manifest": context.plan_graph['graph']['file_manifest']
                 },
                 **({"previous_output": previous_output} if previous_output else {})
             }
@@ -209,7 +177,7 @@ Profile each file separately and return details."""
                 execution_result = await run_user_code(
                     executor_input, 
                     self.multi_mcp, 
-                    context.plan_graph.graph['session_id'] or "default_session",
+                    context.plan_graph['graph']['session_id'] or "default_session",
                     inputs  # Pass inputs to code execution
                 )
                 
@@ -279,7 +247,7 @@ Profile each file separately and return details."""
                     execution_result = await run_user_code(
                         executor_input,
                         self.multi_mcp,
-                        context.plan_graph.graph['session_id'] or "default_session",
+                        context.plan_graph['graph']['session_id'] or "default_session",
                         inputs
                     )
                     
@@ -343,7 +311,7 @@ Profile each file separately and return details."""
             # Use the intelligence workflow
             # Inject numeric session_id into business_context for per-session outputs
             try:
-                sid = dag_context.plan_graph.graph.get('session_id') if dag_context else None
+                sid = dag_context.plan_graph['graph'].get('session_id') if dag_context else None
                 if not business_context:
                     business_context = {}
                 if sid:
@@ -428,7 +396,7 @@ Profile each file separately and return details."""
             analysis_data = inputs
         
         # Get original query from context
-        original_query = context.plan_graph.graph.get('original_query', 'Data analysis request')
+        original_query = context.plan_graph['graph'].get('original_query', 'Data analysis request')
         
         # Run intelligence layer
         # Use data_context from Data Processing Layer if available, otherwise infer from manifest
@@ -467,7 +435,7 @@ Profile each file separately and return details."""
             
             # Inject session_id for per-session outputs
             try:
-                sid = dag_context.plan_graph.graph.get('session_id') if dag_context else None
+                sid = dag_context.plan_graph['graph'].get('session_id') if dag_context else None
                 if sid:
                     # enforce numeric only
                     digits_only = ''.join(ch for ch in str(sid) if ch.isdigit())
@@ -511,7 +479,7 @@ Profile each file separately and return details."""
             file_paths = inputs['files']
         else:
             # Extract from file manifest
-            file_manifest = context.plan_graph.graph.get('file_manifest', [])
+            file_manifest = context.plan_graph['graph'].get('file_manifest', [])
             file_paths = [item.get('path') for item in file_manifest if item.get('path')]
         
         # Extract processing preferences from inputs
@@ -523,7 +491,7 @@ Profile each file separately and return details."""
                     processing_context[key] = value
         
         # Get original query from context
-        original_query = context.plan_graph.graph.get('original_query', 'Data processing request')
+        original_query = context.plan_graph['graph'].get('original_query', 'Data processing request')
         
         # Run data processing layer
         result = await self.run_data_processing_layer(
@@ -638,7 +606,7 @@ Profile each file separately and return details."""
         - First Excel in graph-level file_manifest
         """
         try:
-            manifest = context.plan_graph.graph.get('file_manifest') or []
+            manifest = context.plan_graph['graph'].get('file_manifest') or []
             # Try CSV
             for item in manifest:
                 p = Path(item.get('path', ''))
@@ -703,8 +671,16 @@ Profile each file separately and return details."""
                         try:
                             from datetime import datetime
                             safe_title = str(guide.get('report_title') or 'plotly-report').replace(' ', '-').lower()
+                            # Remove special characters and truncate title to prevent Chart Studio 100-char limit
+                            import re
+                            safe_title = re.sub(r'[^\w\-_]', '', safe_title)  # Remove special chars
                             ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            unique_name = f"{safe_title}-{session_id}-{ts}" if session_id else f"{safe_title}-{ts}"
+                            session_suffix = f"-{session_id}-{ts}" if session_id else f"-{ts}"
+                            # Ensure total filename stays under 100 characters for Chart Studio
+                            max_title_len = 95 - len(session_suffix)  # Leave 5 chars buffer
+                            if len(safe_title) > max_title_len:
+                                safe_title = safe_title[:max_title_len]
+                            unique_name = f"{safe_title}{session_suffix}"
                             guide['filename'] = unique_name
                         except Exception:
                             # Best-effort; if this fails, plotly_v6 will still derive a name
@@ -791,7 +767,7 @@ Profile each file separately and return details."""
             dict with one of {df_csv_path|df_excel_path} when available; otherwise None.
         """
         try:
-            manifest = (context.plan_graph.graph or {}).get('file_manifest') or []
+            manifest = (context.plan_graph['graph'] or {}).get('file_manifest') or []
             for item in manifest:
                 p = Path(item.get('path', ''))
                 if p.suffix.lower() == '.csv' and p.exists():
@@ -930,7 +906,7 @@ Profile each file separately and return details."""
                 system_context = inputs
         
         # Get original query from context
-        original_query = context.plan_graph.graph.get('original_query', 'Orchestration request')
+        original_query = context.plan_graph['graph'].get('original_query', 'Orchestration request')
         
         # Run appropriate orchestration
         if orchestration_type == "discovery":

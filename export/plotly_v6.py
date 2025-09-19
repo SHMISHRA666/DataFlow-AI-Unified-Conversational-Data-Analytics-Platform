@@ -1030,6 +1030,9 @@ def build_report(df: pd.DataFrame,
                     col_width_weights=col_width_weights,
                 )
                 fname = (guide.get("filename") or title).replace(" ", "-").lower()
+                # Ensure filename doesn't exceed Chart Studio's 100-character limit
+                if len(fname) > 95:  # Leave some buffer
+                    fname = fname[:95]
                 url = publish_cs(publish_py, combo, filename=fname, sharing=publish_sharing, auto_open=False)
                 published.append((title, url))
                 print(f"📤 Published combined report: {url}")
@@ -1039,6 +1042,9 @@ def build_report(df: pd.DataFrame,
             for name, fig in zip(built_names, built_figs):
                 try:
                     fname = name.replace(" ", "-").lower()
+                    # Ensure filename doesn't exceed Chart Studio's 100-character limit
+                    if len(fname) > 95:  # Leave some buffer
+                        fname = fname[:95]
                     url = publish_cs(publish_py, fig, filename=fname, sharing=publish_sharing, auto_open=False)
                     published.append((name, url))
                     print(f"📤 Published '{name}': {url}")
@@ -1106,34 +1112,74 @@ def main():
     p.add_argument("--cs-api-key", help="Chart Studio API key (or set env PLOTLY_API_KEY).")
     p.add_argument("--cs-domain", help="Chart Studio Enterprise domain (e.g., https://plotly.your-company.com)")
 
-    # Dummy data
+    # Dummy data generation (fully configurable, no hardcoded values)
     p.add_argument("--make-dummy", action="store_true", help="Generate a dummy CSV (and exit) at the --csv path.")
     p.add_argument("--rows", type=int, default=500, help="Rows for dummy CSV (default 500).")
     p.add_argument("--cats", help="Comma-separated labels for the category column (e.g., 'North,South').")
     p.add_argument("--col2", default="Category", help="Name of the categorical column for dummy data (default: Category)")
+    p.add_argument("--time-col", default="auto", help="Name of the time column for dummy data (default: auto-detect from col2)")
+    p.add_argument("--value-col", default="Value", help="Name of the value column for dummy data (default: Value)")
+    p.add_argument("--year-range", help="Year range for dummy data as 'start,end' (default: current_year-5 to current_year)")
+    p.add_argument("--base-value", type=float, default=1000.0, help="Base value for dummy data generation (default: 1000.0)")
 
     args = p.parse_args()
 
     if args.make_dummy:
         if not args.csv: sys.exit("--csv is required when using --make-dummy")
         cats = [s.strip() for s in args.cats.split(",")] if args.cats else None
-        # reuse v4 dummy behavior
-        np.random.seed(7)
-        DEFAULT_CATS = [f"Category_{i}" for i in range(1, 11)]
-        cats = cats or DEFAULT_CATS
+        
+        # Generate configurable dummy data without hardcoded values
+        np.random.seed(7)  # For reproducible testing
+        
+        # Use configurable categories instead of hardcoded defaults
+        if not cats:
+            # Generate dynamic category names based on user's col2 parameter
+            col_base = args.col2.replace("_", "").replace(" ", "")
+            cats = [f"{col_base}_{i}" for i in range(1, 11)]
+        
+        # Parse configurable year range
+        current_year = datetime.now().year
+        if args.year_range:
+            try:
+                start_year, end_year = map(int, args.year_range.split(','))
+                year_range = (start_year, end_year + 1)
+            except ValueError:
+                print(f"⚠️ Invalid year range format '{args.year_range}', using default")
+                year_range = (current_year - 5, current_year + 1)
+        else:
+            year_range = (current_year - 5, current_year + 1)
+        
+        # Configure column names
+        if args.time_col == "auto":
+            time_col = "Year" if "year" in args.col2.lower() else "Time"
+        else:
+            time_col = args.time_col
+        value_col = args.value_col
+        
+        # Generate configurable dummy data
         data = []
+        base_value_mean = args.base_value
+        
         for _ in range(args.rows):
-            year = np.random.randint(2020, 2026)
+            # Use configurable year range
+            year = np.random.randint(year_range[0], year_range[1])
             cat = np.random.choice(cats)
-            base = np.random.lognormal(mean=10.0, sigma=0.25)
-            bias = (cats.index(cat) + 1) * 1000
-            drift = (year - 2020) * 3000
-            val = round(base / 500 + bias + drift + np.random.normal(0, 2000), 2)
-            data.append((year, cat, max(0.0, val)))
-        df_dummy = pd.DataFrame(data, columns=["Year", args.col2, "Sales"])
+            
+            # Generate realistic values using configurable base value
+            base_value = np.random.lognormal(mean=np.log(base_value_mean), sigma=0.5)
+            category_multiplier = (cats.index(cat) + 1) * 0.1
+            year_trend = (year - year_range[0]) * np.random.uniform(
+                base_value_mean * 0.05, base_value_mean * 0.2
+            )
+            noise = np.random.normal(0, base_value * 0.1)
+            
+            final_value = round(base_value * (1 + category_multiplier) + year_trend + noise, 2)
+            data.append((year, cat, max(0.0, final_value)))
+        
+        df_dummy = pd.DataFrame(data, columns=[time_col, args.col2, value_col])
         Path(os.path.dirname(args.csv) or ".").mkdir(parents=True, exist_ok=True)
         df_dummy.to_csv(args.csv, index=False)
-        print(f"🧪 Dummy CSV written: {args.csv} (rows={len(df_dummy)}; col2='{args.col2}'; cats={len(cats)})")
+        print(f"🧪 Dummy CSV written: {args.csv} (rows={len(df_dummy)}; categories={len(cats)}; years={year_range[0]}-{year_range[1]-1}; columns=[{time_col}, {args.col2}, {value_col}])")
         return
 
     if not args.csv: sys.exit("--csv is required (or use --make-dummy to create one)")

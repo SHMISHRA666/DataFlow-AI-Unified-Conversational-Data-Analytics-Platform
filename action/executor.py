@@ -10,7 +10,6 @@ import matplotlib
 from bs4 import BeautifulSoup
 import ast
 import re
-import cssutils
 
 # Simple imports for Python execution
 SAFE_BUILTINS = {
@@ -91,12 +90,6 @@ async def process_direct_files(files_dict: Dict[str, str], session_id: str) -> D
     
     return results
 
-def make_tool_proxy(tool_name: str, mcp):
-    """Create async proxy function for MCP tools"""
-    async def _tool_fn(*args):
-        return await mcp.function_wrapper(tool_name, *args)
-    return _tool_fn
-
 def create_file_utilities(session_id: str):
     """Create file utility functions for the execution context"""
     session_dir = Path(f"media/generated/{session_id}")
@@ -145,19 +138,12 @@ async def execute_python_code_variant(code: str, multi_mcp, session_id: str, inp
     output_dir = Path(f"media/generated/{session_id}")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create tool proxies using function_wrapper
-    tool_funcs = {}
-    if multi_mcp:
-        for tool in multi_mcp.get_all_tools():
-            tool_funcs[tool.name] = make_tool_proxy(tool.name, multi_mcp)
-    
     # Build safe execution context
     file_utils = create_file_utilities(session_id)
     safe_globals = {
         **SAFE_BUILTINS,
-        **tool_funcs,
         **file_utils,
-        'multi_mcp': multi_mcp,
+        'multi_mcp': None,
         'session_id': session_id,
         'output_dir': str(output_dir),
         'inputs': inputs or {}
@@ -195,8 +181,7 @@ async def execute_python_code_variant(code: str, multi_mcp, session_id: str, inp
         class AwaitTransformer(ast.NodeTransformer):
             def visit_Call(self, node):
                 self.generic_visit(node)
-                if isinstance(node.func, ast.Name) and node.func.id in tool_funcs:
-                    return ast.Await(value=node)
+                # No MCP tool proxies; return node unchanged
                 return node
         
         async_func = AwaitTransformer().visit(async_func)
@@ -222,11 +207,7 @@ async def execute_python_code_variant(code: str, multi_mcp, session_id: str, inp
         if result is None:
             result = {k: v for k, v in local_vars.items() if not k.startswith('__')}
         
-        # 🚨 DEBUG: Print code execution result
-        print(f"\n🚨 CODE EXECUTION RESULT:")
-        print(f"Result: {result}")
-        print(f"Local vars: {[k for k in local_vars.keys() if not k.startswith('__')]}")
-        print("=" * 30)
+        # Minimal logging only
         
         return {
             "status": "success",
@@ -263,9 +244,6 @@ async def execute_code_variants(code_variants: dict, multi_mcp, session_id: str,
         
         result = await execute_python_code_variant(code, multi_mcp, session_id, inputs)
 
-        print("HALT HERE")
-        print(result)
-        
         if result["status"] == "success":
             # Success!
             result["successful_variant"] = variant_name
@@ -491,13 +469,7 @@ async def run_user_code(output_data: dict, multi_mcp, session_id: str = "default
         
         log_step(f"🏁 Completed: {ops} | {file_count} files{variant_info} | {results['total_time']:.2f}s", symbol="✅")
         
-        # 🚨 DEBUG: Print final executor result
-        print(f"\n🚨 EXECUTOR FINAL RESULT:")
-        print(f"Status: {results['status']}")
-        print(f"Operations: {results['operations']}")
-        print(f"Code results: {results.get('code_results', {}).get('result', 'NO_CODE_RESULT')}")
-        print(f"Full results: {results}")
-        print("=" * 60)
+        # Minimal summary logging
         
         return results
         
