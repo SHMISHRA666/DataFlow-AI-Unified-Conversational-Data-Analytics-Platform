@@ -42,3 +42,8 @@ agents:
   DataAnalysisAgent:
     prompt_file: "prompts/data_analysis_prompt.txt"
     model: "gemini"
+
+  # Conversation Planner Agent for top-of-funnel classification
+  ConversationPlannerAgent:
+    prompt_file: "prompts/conversation_planner_agent.txt"
+    model: "gemini"

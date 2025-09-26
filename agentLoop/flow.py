@@ -5,6 +5,8 @@ from utils.utils import log_step, log_error
 from agentLoop.intelligence_flow import IntelligenceWorkflow
 from agentLoop.orchestration_flow import OrchestrationWorkflow
 from agentLoop.data_processing_flow import DataProcessingWorkflow
+from utils.utils import load_file_type_config
+from agentLoop.conversation_planner_agent import ConversationPlannerAgent
 import pandas as pd
 from dotenv import load_dotenv
 from pathlib import Path
@@ -42,35 +44,84 @@ class AgentLoop4:
         self.intelligence_workflow = IntelligenceWorkflow(multi_mcp)
         self.orchestration_workflow = OrchestrationWorkflow(multi_mcp)
         self.data_processing_workflow = DataProcessingWorkflow(multi_mcp)
+        self.conversation_planner = ConversationPlannerAgent()
 
     async def run(self, query, file_manifest, uploaded_files):
-        # Build a default plan graph without Planner/Distiller
+        # Step 1: Use conversation planner to classify the query
+        log_step("🧭 Running Conversation Planner Agent", symbol="🔍")
+        
+        # Prepare file information for conversation planner
+        file_info = []
+        if file_manifest:
+            for file_item in file_manifest:
+                file_info.append({
+                    'name': file_item.get('name', ''),
+                    'path': file_item.get('path', ''),
+                    'size': file_item.get('size', 0)
+                })
+        
+        # Get conversation plan
+        conversation_plan = await self.conversation_planner.classify_conversation(
+            user_query=query,
+            files=file_info,
+            file_profiles=None  # Could add file content analysis here if needed
+        )
+        
+        # Step 2: Build plan graph based on classification
         nodes = []
         edges = []
-        if uploaded_files:
+        
+        # Check if this is a qualitative or quantitative request
+        if conversation_plan.primary_classification == "qualitative":
+            # Route to RAG/qualitative processing
+            log_step("📚 Routing to qualitative (RAG) processing", symbol="🔄")
             nodes.append({
-                "id": "data_processing",
-                "description": "Process uploaded files and prepare analysis-ready data",
-                "agent": "DataProcessingLayer",
+                "id": "rag_processing",
+                "description": "Process documents using RAG for qualitative analysis",
+                "agent": "RAGProcessing",
                 "reads": [],
-                "writes": ["intelligence_layer_ready_data"]
+                "writes": ["qualitative_output"],
+                "user_query": conversation_plan.user_query
             })
-            nodes.append({
-                "id": "intelligence",
-                "description": "Generate recommendations, charts and narratives",
-                "agent": "IntelligenceLayer",
-                "reads": ["data_processing"],
-                "writes": ["intelligence_output"]
-            })
-            edges.append({"source": "data_processing", "target": "intelligence"})
         else:
-            nodes.append({
-                "id": "intelligence",
-                "description": "Analyze context and generate charts/narratives",
-                "agent": "IntelligenceLayer",
-                "reads": [],
-                "writes": ["intelligence_output"]
-            })
+            # Quantitative processing - check for secondary classification
+            if uploaded_files:
+                nodes.append({
+                    "id": "data_processing",
+                    "description": "Process uploaded files and prepare analysis-ready data",
+                    "agent": "DataProcessingLayer",
+                    "reads": [],
+                    "writes": ["intelligence_layer_ready_data"],
+                    "user_query": conversation_plan.user_query
+                })
+                
+                # Configure intelligence layer based on secondary classification
+                intelligence_desc = "Generate recommendations, charts and narratives"
+                if conversation_plan.secondary_classification == "Report":
+                    intelligence_desc = "Generate comprehensive analysis report with charts and insights"
+                elif conversation_plan.secondary_classification == "Chart":
+                    intelligence_desc = "Generate data visualizations and charts"
+                
+                nodes.append({
+                    "id": "intelligence",
+                    "description": intelligence_desc,
+                    "agent": "IntelligenceLayer",
+                    "reads": ["data_processing"],
+                    "writes": ["intelligence_output"],
+                    "secondary_classification": conversation_plan.secondary_classification,
+                    "user_query": conversation_plan.user_query
+                })
+                edges.append({"source": "data_processing", "target": "intelligence"})
+            else:
+                nodes.append({
+                    "id": "intelligence",
+                    "description": "Analyze context and generate charts/narratives",
+                    "agent": "IntelligenceLayer",
+                    "reads": [],
+                    "writes": ["intelligence_output"],
+                    "secondary_classification": conversation_plan.secondary_classification,
+                    "user_query": conversation_plan.user_query
+                })
 
         plan_graph = {"nodes": nodes, "edges": edges}
 
@@ -81,6 +132,13 @@ class AgentLoop4:
             original_query=query,
             file_manifest=file_manifest
         )
+        
+        # Store conversation plan and file type config in context for downstream use
+        context.plan_graph['graph']['conversation_plan'] = conversation_plan.to_dict()
+        try:
+            context.plan_graph['graph']['file_type_config'] = load_file_type_config()
+        except Exception:
+            pass
         
         context.set_multi_mcp(self.multi_mcp)
         # Ensure downstream exporters can discover dataset paths
@@ -97,6 +155,8 @@ class AgentLoop4:
 
         # Phase 4: Execute sequentially (no DAG scheduler)
         step_order = []
+        if any(n.get("id") == "rag_processing" for n in plan_graph.get("nodes", [])):
+            step_order.append("rag_processing")
         if any(n.get("id") == "data_processing" for n in plan_graph.get("nodes", [])):
             step_order.append("data_processing")
         if any(n.get("id") == "intelligence" for n in plan_graph.get("nodes", [])):
@@ -105,7 +165,9 @@ class AgentLoop4:
         for step_id in step_order:
             try:
                 context.mark_running(step_id)
-                if step_id == "data_processing":
+                if step_id == "rag_processing":
+                    result = await self._handle_qualitative_flow(step_id, context)
+                elif step_id == "data_processing":
                     result = await self._handle_data_processing_step(step_id, context)
                 elif step_id == "intelligence":
                     result = await self._handle_intelligence_step(step_id, context)
@@ -133,6 +195,8 @@ class AgentLoop4:
         agent_type = step_data["agent"]
         
         # Handle special workflow steps directly
+        if agent_type == "RAGProcessing":
+            return await self._handle_qualitative_flow(step_id, context)
         if agent_type == "DataProcessingLayer":
             return await self._handle_data_processing_step(step_id, context)
         if agent_type == "IntelligenceLayer":
@@ -395,8 +459,13 @@ class AgentLoop4:
         if not analysis_data:
             analysis_data = inputs
         
-        # Get original query from context
+        # Get original query and conversation plan from context
         original_query = context.plan_graph['graph'].get('original_query', 'Data analysis request')
+        conversation_plan = context.plan_graph['graph'].get('conversation_plan', {})
+        
+        # Add conversation plan to business context for intelligence layer
+        business_context['conversation_plan'] = conversation_plan
+        business_context['secondary_classification'] = conversation_plan.get('secondary_classification', 'None')
         
         # Run intelligence layer
         # Use data_context from Data Processing Layer if available, otherwise infer from manifest
@@ -490,8 +559,13 @@ class AgentLoop4:
                 else:
                     processing_context[key] = value
         
-        # Get original query from context
+        # Get original query and conversation plan from context
         original_query = context.plan_graph['graph'].get('original_query', 'Data processing request')
+        conversation_plan = context.plan_graph['graph'].get('conversation_plan', {})
+        
+        # Add conversation plan to processing context
+        processing_context['conversation_plan'] = conversation_plan
+        processing_context['user_query'] = conversation_plan.get('user_query', original_query)
         
         # Run data processing layer
         result = await self.run_data_processing_layer(
@@ -866,6 +940,115 @@ class AgentLoop4:
             
         except Exception as e:
             log_error(f"Full orchestration failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _handle_qualitative_flow(self, step_id, context):
+        """
+        Handle qualitative data processing using the RAG pipeline from agentLoop.rag_ingest.
+
+        Steps:
+        - Collect qualitative files from the user manifest
+        - Create a per-session RAG workspace (documents + faiss_index)
+        - Copy files into workspace and set env vars so rag_ingest uses it
+        - Run ingestion to build FAISS
+        - Run search and chat to produce an answer
+        """
+        try:
+            log_step("📚 Processing qualitative request with RAG", symbol="🔍")
+
+            # Gather context
+            conversation_plan = context.plan_graph['graph'].get('conversation_plan', {})
+            user_query = conversation_plan.get('user_query', context.plan_graph['graph'].get('original_query', ''))
+            session_id = context.plan_graph['graph'].get('session_id')
+
+            # Get file paths from manifest using configurable extensions
+            file_manifest = context.plan_graph['graph'].get('file_manifest', [])
+            file_cfg = context.plan_graph['graph'].get('file_type_config') or load_file_type_config()
+            allowed_exts = set(file_cfg.get('qualitative_rag_extensions', []))
+            qualitative_files = []
+            for file_item in file_manifest:
+                file_path = file_item.get('path', '')
+                if not file_path:
+                    continue
+                file_ext = Path(file_path).suffix.lower()
+                if not allowed_exts or file_ext in allowed_exts:
+                    qualitative_files.append(file_path)
+
+            if not qualitative_files:
+                log_error("No qualitative files found for RAG processing")
+                return {
+                    "success": False,
+                    "error": "No qualitative files (PDF, HTML, TXT, MD, JSON) found in uploaded files"
+                }
+
+            # Prepare per-session directories for RAG
+            from pathlib import Path as _P
+            import os as _os
+            import shutil as _shutil
+            from importlib import reload as _reload
+
+            base_dir = _P('generated_charts') / (str(session_id) if session_id else 'rag_session') / 'rag'
+            docs_dir = base_dir / 'documents'
+            faiss_dir = base_dir / 'faiss_index'
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            faiss_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy qualitative files into documents dir
+            copied_files: list[str] = []
+            for src in qualitative_files:
+                try:
+                    dst = docs_dir / _P(src).name
+                    _shutil.copy2(src, dst)
+                    copied_files.append(str(dst))
+                except Exception as copy_err:
+                    log_error(f"Failed to copy {src} for RAG: {copy_err}")
+
+            if not copied_files:
+                return {"success": False, "error": "Failed to prepare documents for RAG ingestion"}
+
+            # Configure rag_ingest to use per-session dirs
+            _os.environ['DOCS_DIR'] = str(docs_dir)
+            _os.environ['FAISS_DIR'] = str(faiss_dir)
+
+            # Import and reload module so its constants pick up env vars
+            import agentLoop.rag_ingest as rag_ingest
+            rag_ingest = _reload(rag_ingest)
+
+            log_step(f"📄 Ingesting {len(copied_files)} qualitative files", symbol="📥")
+            rag_ingest.process_documents(rebuild_index=True)
+
+            # Run search and chat
+            results = rag_ingest.search(user_query)
+            context_chunks = [r.get("chunk", "") for r in results]
+            try:
+                answer = rag_ingest.chat_with_gemini(user_query, context_chunks)
+            except Exception as e:
+                # If Gemini isn't available, still return search results
+                log_error(f"Gemini chat failed, returning search results only: {e}")
+                answer = None
+
+            # Compose response
+            rag_response = {
+                "query": user_query,
+                "files_processed": [str(_P(f).name) for f in copied_files],
+                "faiss_index_dir": str(faiss_dir),
+                "top_k_results": results,
+                **({"answer": answer} if answer is not None else {})
+            }
+
+            log_step("✅ RAG processing completed", symbol="📚")
+
+            return {
+                "success": True,
+                "output": {
+                    "qualitative_output": rag_response,
+                    "processing_type": "RAG",
+                    "conversation_plan": conversation_plan
+                }
+            }
+
+        except Exception as e:
+            log_error(f"Qualitative flow processing failed: {e}")
             return {"success": False, "error": str(e)}
 
     async def _handle_orchestration_step(self, step_id, context):

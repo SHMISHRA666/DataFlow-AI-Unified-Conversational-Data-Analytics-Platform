@@ -35,8 +35,8 @@ class OrchestrationLayer:
         """
         try:
             log_step("🔍 Starting data discovery and cataloging", symbol="🚀")
-            
-            # Run Discovery Agent
+
+            # Run Discovery Agent (augmented with programmatic detection)
             discovery_results = await self._run_discovery(organization_context, discovery_constraints, user_query)
             
             log_step("✅ Discovery and cataloging completed", symbol="🎉")
@@ -172,41 +172,223 @@ class OrchestrationLayer:
     async def _run_discovery(self, organization_context: Dict[str, Any], 
                            discovery_constraints: Dict[str, Any] = None,
                            user_query: str = "") -> Dict[str, Any]:
-        """Run the Discovery Agent"""
-        
-        input_data = {
-            "user_query": user_query,
-            "organization_context": organization_context or {},
-            "discovery_constraints": discovery_constraints or {},
-            "task": "discover_and_catalog_data_sources",
-            "objective": "Discover available data sources and create comprehensive data catalog"
-        }
-        
-        result = await self.agent_runner.run_agent("DiscoveryAgent", input_data)
-        
-        if result["success"]:
-            return result["output"]
-        else:
-            raise Exception(f"DiscoveryAgent failed: {result.get('error', 'Unknown error')}")
+        """Run the Discovery Agent with programmatic data-source and BI tool detection.
+
+        Returns a dict with keys: {data_sources, bi_tool_recommendation, discovery_summary, llm_notes?}
+        """
+        try:
+            org = organization_context or {}
+            constraints = discovery_constraints or {}
+
+            # 1) Extract file manifest from any known field/name
+            def _extract_files(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+                files: List[Dict[str, Any]] = []
+                candidates = [
+                    ctx.get("file_manifest"),
+                    ctx.get("files"),
+                    (ctx.get("session_context") or {}).get("file_manifest"),
+                    (ctx.get("dag_context") or {}).get("file_manifest"),
+                ]
+                # Also scan nested dicts for a list that looks like a manifest
+                for val in list(ctx.values()):
+                    if isinstance(val, dict):
+                        candidates.append(val.get("file_manifest"))
+                        candidates.append(val.get("files"))
+                for cand in candidates:
+                    if isinstance(cand, list) and cand:
+                        for item in cand:
+                            if isinstance(item, dict) and (item.get('path') or item.get('name')):
+                                files.append({
+                                    'name': item.get('name') or (Path(item.get('path')).name if item.get('path') else ''),
+                                    'path': item.get('path'),
+                                    'size': item.get('size'),
+                                    'extension': Path((item.get('path') or item.get('name') or '')).suffix.lower(),
+                                    'exists': bool(item.get('path') and Path(item.get('path')).exists())
+                                })
+                return files
+
+            data_sources = _extract_files(org)
+
+            # 2) Classify files by type for downstream routing
+            from utils.utils import load_file_type_config
+            cfg = load_file_type_config()
+            fixed_quant = cfg["fixed_quantitative"]
+            fixed_qual = cfg["fixed_qualitative"]
+            flexible = cfg["flexible_types"]
+            for ds in data_sources:
+                ext = ds.get('extension')
+                if ext in fixed_quant:
+                    ds['data_nature'] = 'structured'
+                elif ext in fixed_qual:
+                    ds['data_nature'] = 'unstructured'
+                elif ext in flexible:
+                    ds['data_nature'] = 'flexible'
+                else:
+                    ds['data_nature'] = 'unknown'
+
+            # 3) Infer BI tool (Report vs Plotly) from user query + constraints
+            uq = (user_query or '').lower()
+            request_report = any(k in uq for k in ["report", "pdf", "executive", "insights"])
+            request_charts = any(k in uq for k in ["chart", "plot", "visual", "dashboard", "graph"]) or any(
+                (ds.get('data_nature') == 'structured') for ds in (data_sources or [])
+            )
+            preferred_tool = (constraints or {}).get('preferred_bi_tool')  # optional override
+
+            if preferred_tool in ("report", "plotly"):
+                bi_tool = preferred_tool
+            elif request_report and not request_charts:
+                bi_tool = "report"
+            elif request_charts and not request_report:
+                bi_tool = "plotly"
+            else:
+                # When ambiguous, prefer plotly for structured data presence; otherwise report
+                has_structured = any(ds.get('data_nature') == 'structured' for ds in data_sources)
+                bi_tool = "plotly" if has_structured else "report"
+
+            # 4) Optionally ask LLM for additional notes/suggestions
+            llm_notes = None
+            try:
+                input_data = {
+                    "user_query": user_query,
+                    "organization_context": org,
+                    "discovery_constraints": constraints,
+                    "data_sources": data_sources,
+                    "candidate_bi_tool": bi_tool,
+                    "task": "discover_and_catalog_data_sources",
+                    "objective": "Recommend data sources and BI tool for the request"
+                }
+                result = await self.agent_runner.run_agent("DiscoveryAgent", input_data)
+                if result.get("success"):
+                    llm_notes = result.get("output")
+            except Exception as e:
+                log_error(f"LLM discovery notes failed: {e}")
+
+            discovery_output = {
+                "data_sources": data_sources,
+                "bi_tool_recommendation": bi_tool,
+                "discovery_summary": {
+                    "num_sources": len(data_sources),
+                    "num_existing": sum(1 for d in data_sources if d.get('exists')),
+                    "structured": sum(1 for d in data_sources if d.get('data_nature') == 'structured'),
+                    "unstructured": sum(1 for d in data_sources if d.get('data_nature') == 'unstructured'),
+                    "flexible": sum(1 for d in data_sources if d.get('data_nature') == 'flexible')
+                },
+                **({"llm_notes": llm_notes} if llm_notes else {})
+            }
+
+            return discovery_output
+        except Exception as e:
+            raise Exception(f"Discovery process failed: {e}")
     
     async def _run_monitoring(self, system_context: Dict[str, Any], user_query: str = "") -> Dict[str, Any]:
-        """Run the Monitoring Agent"""
-        
-        input_data = {
-            "user_query": user_query,
-            "system_context": system_context or {},
-            "metrics": (system_context or {}).get("system_metrics", {}),
-            "monitoring_policies": (system_context or {}).get("monitoring_policies", {}),
-            "task": "monitor_system_health_and_performance",
-            "objective": "Monitor system health, data quality, and operational performance"
-        }
-        
-        result = await self.agent_runner.run_agent("MonitoringAgent", input_data)
-        
-        if result["success"]:
-            return result["output"]
-        else:
-            raise Exception(f"MonitoringAgent failed: {result.get('error', 'Unknown error')}")
+        """Run the Monitoring Agent with concrete metrics and alerting.
+
+        Tracks:
+        - Data source availability (from file manifest)
+        - RAG index/build presence for qualitative runs
+        - Answer latency vs threshold
+        - Recent errors
+        """
+        try:
+            ctx = system_context or {}
+
+            # Extract files for availability metrics
+            def _extract_manifest(sc: Dict[str, Any]) -> List[Dict[str, Any]]:
+                cand = sc.get('file_manifest') or sc.get('files') or (sc.get('session_context') or {}).get('file_manifest')
+                if isinstance(cand, list):
+                    return cand
+                return []
+
+            manifest = _extract_manifest(ctx)
+            files_checked = []
+            for item in manifest:
+                p = item.get('path') if isinstance(item, dict) else item
+                exists = bool(p and Path(p).exists())
+                files_checked.append({
+                    'name': (item.get('name') if isinstance(item, dict) else Path(p).name) if p else None,
+                    'path': p,
+                    'exists': exists,
+                    'extension': Path(p).suffix.lower() if p else None
+                })
+
+            # RAG success heuristic: faiss index present when used
+            session_id = (ctx.get('session_id') or (ctx.get('dag_context') or {}).get('session_id'))
+            rag_index_present = False
+            if session_id:
+                faiss_dir = Path('generated_charts') / str(session_id) / 'rag' / 'faiss_index'
+                rag_index_present = (faiss_dir / 'index.bin').exists()
+
+            # Latency metrics
+            latency_ms = ctx.get('answer_latency_ms') or ctx.get('latency_ms')
+            threshold_ms = (ctx.get('monitoring_policies') or {}).get('answer_latency_threshold_ms', 60000)
+
+            # Errors collected externally can be passed in
+            recent_errors = ctx.get('errors') or []
+
+            availability_ratio = (sum(1 for f in files_checked if f['exists']) / len(files_checked)) if files_checked else 1.0
+
+            alerts: List[str] = []
+            if files_checked and availability_ratio < 1.0:
+                missing = [f['name'] or f['path'] for f in files_checked if not f['exists']]
+                alerts.append(f"Missing files: {', '.join(missing)}")
+            if latency_ms and latency_ms > threshold_ms:
+                alerts.append(f"High answer latency: {latency_ms} ms > {threshold_ms} ms")
+            if not rag_index_present and ctx.get('processing_type') == 'RAG':
+                alerts.append("RAG index not found after qualitative processing")
+            if recent_errors:
+                alerts.extend([f"Error: {e}" for e in recent_errors[:5]])
+
+            # Simple health score
+            score = 100.0
+            if files_checked and availability_ratio < 1.0:
+                score -= (1.0 - availability_ratio) * 40.0
+            if latency_ms and latency_ms > threshold_ms:
+                score -= 20.0
+            if not rag_index_present and ctx.get('processing_type') == 'RAG':
+                score -= 20.0
+            if recent_errors:
+                score -= min(20.0, len(recent_errors) * 5.0)
+            score = max(0.0, min(100.0, score))
+
+            status = 'healthy' if score >= 80 else ('degraded' if score >= 50 else 'failing')
+
+            # Optional LLM narrative
+            llm_notes = None
+            try:
+                input_data = {
+                    "user_query": user_query,
+                    "system_context": ctx,
+                    "metrics": {
+                        "availability_ratio": availability_ratio,
+                        "latency_ms": latency_ms,
+                        "threshold_ms": threshold_ms,
+                        "rag_index_present": rag_index_present,
+                        "health_score": score,
+                        "status": status
+                    },
+                    "task": "monitor_system_health_and_performance",
+                    "objective": "Summarize current system health and risks"
+                }
+                result = await self.agent_runner.run_agent("MonitoringAgent", input_data)
+                if result.get("success"):
+                    llm_notes = result.get("output")
+            except Exception as e:
+                log_error(f"LLM monitoring notes failed: {e}")
+
+            monitoring_output = {
+                "data_source_availability": files_checked,
+                "rag_index_present": rag_index_present,
+                "latency_ms": latency_ms,
+                "latency_threshold_ms": threshold_ms,
+                "alerts": alerts,
+                "health_score": score,
+                "status": status,
+                **({"llm_notes": llm_notes} if llm_notes else {})
+            }
+
+            return monitoring_output
+        except Exception as e:
+            raise Exception(f"Monitoring process failed: {e}")
 
 
 class OrchestrationWorkflow:

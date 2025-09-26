@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-from utils.utils import log_step, log_error
+from utils.utils import log_step, log_error, load_file_type_config
 from agentLoop.model_manager import ModelManager
 from utils.json_parser import parse_llm_json
 import json
@@ -61,9 +61,10 @@ class ConversationPlannerAgent:
         extensions = []
         
         # Fixed file type classifications (regardless of user intent)
-        fixed_quantitative = {'.csv', '.xlsx', '.xls'}  # ALWAYS quantitative
-        fixed_qualitative = {'.pdf', '.html', '.htm', '.txt', '.md'}  # ALWAYS qualitative
-        flexible_types = {'.json'}  # Depends on user intent
+        cfg = load_file_type_config()
+        fixed_quantitative = cfg["fixed_quantitative"]
+        fixed_qualitative = cfg["fixed_qualitative"]
+        flexible_types = cfg["flexible_types"]
 
         has_fixed_quantitative = False
         has_fixed_qualitative = False

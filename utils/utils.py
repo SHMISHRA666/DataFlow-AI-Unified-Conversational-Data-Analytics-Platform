@@ -3,6 +3,7 @@ from datetime import datetime
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from typing import Dict, Any
 
 def log_step(title: str, payload=None, symbol: str = "🟢"):
     print(f"\n[b]{symbol} {title}[/b]")
@@ -176,3 +177,37 @@ def save_final_plan(session_id: str, final_data: dict, base_dir: str = "memory/s
     folder = get_log_folder(session_id, base_dir)
     plan_path = folder / f"{session_id}.json"
     save_json_log(final_data, plan_path)
+
+
+# --------------------
+# Config helpers
+# --------------------
+def load_file_type_config(path: str = "config/file_types.yaml") -> Dict[str, Any]:
+    """Load file type classification config with safe defaults.
+
+    Returns sets for quick membership checks. If the config file
+    is missing or invalid, sensible defaults are used.
+    """
+    cfg: Dict[str, Any] = {}
+    try:
+        import yaml  # type: ignore
+        with open(path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+            if isinstance(loaded, dict):
+                cfg.update(loaded)
+    except Exception:
+        # Use defaults if file not present
+        pass
+
+    # Defaults
+    fixed_quantitative = cfg.get("fixed_quantitative") or ['.csv', '.xlsx', '.xls']
+    fixed_qualitative = cfg.get("fixed_qualitative") or ['.pdf', '.html', '.htm', '.txt', '.md']
+    flexible_types = cfg.get("flexible_types") or ['.json']
+    qualitative_rag_extensions = cfg.get("qualitative_rag_extensions") or list({*fixed_qualitative, *flexible_types})
+
+    return {
+        "fixed_quantitative": set(fixed_quantitative),
+        "fixed_qualitative": set(fixed_qualitative),
+        "flexible_types": set(flexible_types),
+        "qualitative_rag_extensions": set(qualitative_rag_extensions),
+    }
