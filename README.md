@@ -100,7 +100,7 @@ This will:
 python rag_ingest.py search "What are the key points?"
 ```
 
-Returns JSON of matching chunks.
+Searches the Index directly and returns JSON of matching chunks.
 
 ---
 
@@ -109,7 +109,7 @@ Returns JSON of matching chunks.
 python rag_ingest.py chat "Summarize the findings of the report"
 ```
 
-Uses Gemini to generate context-aware answers.
+Searches the FAISS and uses Gemini to generate context-aware answers.
 
 ---
 
