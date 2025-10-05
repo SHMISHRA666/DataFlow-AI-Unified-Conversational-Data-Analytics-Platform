@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataFlow</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <style>
+      /* Layout adjustments */
+      .app-layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 40px); }
+      .sidebar { background: #fff; border-radius: 10px; padding: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.06); overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+      .sidebar h3 { margin: 0; font-size: 16px; }
+      .history-list { list-style: none; padding: 0; margin: 0; max-height: calc(100vh - 220px); overflow-y: auto; }
+      .history-item { padding: 10px 12px; border-radius: 8px; border: 1px solid #eee; margin-bottom: 8px; background: #fafafa; }
+      .history-item time { display: block; color: #777; font-size: 12px; margin-top: 6px; }
+      .main-pane { display: flex; flex-direction: column; gap: 12px; }
+      .welcome { text-align: center; padding: 8px 12px; }
+      .welcome h1 { font-size: 22px; margin: 6px 0; }
+      .toolbar { display: flex; gap: 12px; align-items: center; justify-content: center; }
+      .toolbar select { padding: 8px 10px; border-radius: 8px; border: 1px solid #ddd; }
+      .section { margin: 0; }
+      .card { margin: 0; }
+      .upload-area { min-height: 180px; }
+      .sidebar .btn { width: 100%; padding: 8px 12px; font-size: 14px; }
+      #pre-chat-container.hidden { display: none; }
+    </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Main Layout -->
+    <div class="app-layout">
+      <!-- Sidebar: History -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h2>Conversations</h2>
+          <button id="new-conversation" class="btn btn-primary" onclick="startNewConversation()">
+            <i class="fas fa-plus"></i> New Conversation
+          </button>
+        </div>
+        <div class="history-container">
+          <h3>History</h3>
+          <ul id="history-list" class="history-list">
+            <!-- History items will be populated here -->
+          </ul>
+        </div>
+      </aside>
+
+      <!-- Main Pane -->
+      <main class="main-pane">
+        <!-- Pre-chat container (shown initially) -->
+        <div id="pre-chat-container" class="pre-chat-container">
+            <div class="welcome-section">
+                <h1>Welcome to DataFlow AI</h1>
+                <p>Upload your dataset or select from the options below to get started.</p>
+            </div>
+
+            <div class="dataset-selector">
+                <label for="dataset-select">Select a dataset:</label>
+                <select id="dataset-select" class="form-control">
+                    <option value="patents">Patents Data</option>
+                    <option value="other">Other Data</option>
+                    <option value="upload" selected>Upload your own data</option>
+                </select>
+            </div>
+
+            <div id="upload-section" class="upload-section" style="display: block;">
+                <div id="upload-area" class="upload-area" style="display: flex; visibility: visible; opacity: 1;">
+                    <div class="upload-content">
+                        <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                        <h3>Drag & Drop your file here</h3>
+                        <p>or click to browse files</p>
+                        <p class="small">Supports CSV, JSON, Excel, HTML, and PDF files</p>
+                        <input type="file" id="file-input" accept=".csv,.json,.xlsx,.xls,.html,.htm,.pdf" style="display: none;">
+                    </div>
+                </div>
+                <div id="file-info" class="file-info hidden">
+                    <h3>File Details</h3>
+                    <div id="file-details" class="file-details">
+                        <!-- File details will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat container (shown after upload) -->
+        <div id="chat-container" class="chat-container" style="display: none;">
+          <div id="chat-history" class="chat-history">
+            <!-- Chat messages will be populated here -->
+          </div>
+          
+          <div id="ask-section" class="ask-section">
+            <div class="ask-container">
+              <input type="text" id="question-input" class="form-control" placeholder="Ask a question about your data..." onkeypress="if(event.key === 'Enter') askQuestion()">
+              <button id="ask-button" class="btn btn-primary" onclick="askQuestion()">
+                <i class="fas fa-paper-plane"></i> Ask
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
