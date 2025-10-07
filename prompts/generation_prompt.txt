@@ -9,7 +9,7 @@ Objective:
   - Start with '---'
   - Top-level keys in order: report_title, columns, charts
   - 'columns' is a mapping of short aliases to human-readable labels (e.g., year: Year). All chart fields referencing dataset columns MUST use $alias (e.g., x: $year)
-  - 'charts' is a list; each chart item may include: name, type (bar|line|pie|scatter|heatmap|treemap|table|histogram), title, x, y, color, value, agg, by (list), markers (bool), text_auto (bool), stack (bool), measures (list), trendline (bool), colorbar (with len, thickness), path (list), top_n (int), sort (with by, ascending), limit (int), y_tickformat, height_weight
+  - 'charts' is a list; each chart item may include: name, type (bar|line|pie|scatter|heatmap|treemap|table|histogram), title, x, y, color, size, symbol, facet_row, facet_col, animation_frame, hover (list), value, agg, by (list), markers (bool), text_auto (bool), stack (bool), measures (list), trendline (bool), colorbar (with len, thickness), path (list), top_n (int), sort (with by, ascending), limit (int), y_tickformat, height_weight
 
 Inputs (Placeholders):
 - {recommendations}: Output from RecommendationAgent (visualization plan).
@@ -30,14 +30,14 @@ Constraints:
 
 Workflow (internal):
 1) Extract actual column names from {analysis_results}.data_schema.available_columns.
-2) Map each recommended_visualization to Plotly code using ONLY the actual column names from the data.
+2) Map each recommended_visualization to Plotly code using ONLY the actual column names from the data. When the recommendation includes spec.color/spec.size/spec.symbol/spec.facet_row/spec.facet_col/spec.animation_frame/spec.hover, wire them into the Plotly call (px.line/px.bar/px.scatter/px.histogram/px.pie/px.treemap) appropriately.
 3) CRITICAL: When aggregation is specified in recommendations, implement it properly in the code:
    - For count aggregations: use df.groupby(x_column)[y_column].transform('count') or df.groupby(x_column).size()
    - For sum aggregations: use df.groupby(x_column)[y_column].transform('sum')
    - For mean aggregations: use df.groupby(x_column)[y_column].transform('mean')
    - For histograms: use px.histogram(df, x=column) which automatically counts
    - For pie charts: use px.pie(df, names=column) which automatically counts
-4) Ensure code is self-contained (imports, assumes df exists) and creates fig.
+4) Ensure code is self-contained (imports, assumes df exists) and creates fig. Only pass encodings that exist in df columns; ignore optional encodings if the field is missing at runtime.
 5) Provide optional SQL only if {analysis_results} suggests a source schema.
 6) Assemble JSON strictly to schema; validate identifiers.
 

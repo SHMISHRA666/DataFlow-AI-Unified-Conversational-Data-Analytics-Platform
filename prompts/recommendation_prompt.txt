@@ -21,6 +21,7 @@ Constraints:
 - Use only information present in inputs; no external facts.
 - Prefer simple, high-signal visuals first; justify complex visuals.
 - Each visualization must cite concrete columns and intended encodings.
+- Prefer multi-dimensional encodings when appropriate (e.g., use spec.color for a categorical split; add spec.size for a quantitative third dimension; spec.symbol for categorical markers; spec.facet_row/spec.facet_col for small multiples; spec.animation_frame for temporal animation) but only when the chosen fields exist in the schema and improve clarity.
 - If inputs are insufficient, add items to clarifications_needed.
 - Internal reasoning only; output must NOT include chain-of-thought.
 
@@ -29,8 +30,8 @@ Workflow (internal):
 2) Extract actual column names from {analysis_results}.data_schema.available_columns.
 3) Inspect available fields and patterns from {analysis_results}.
 4) Select candidate KPIs with definitions and business rationale using ONLY actual column names.
-5) For each KPI, choose the most effective basic chart using ONLY actual column names; propose advanced only if justified.
-6) CRITICAL: When referencing columns in spec.x, spec.y, spec.color, use the EXACT column names from the schema (e.g., "assignee_organization", "inventor_name", not "assignee", "inventor").
+5) For each KPI, choose the most effective chart, and when justified by the data and audience, add additional encodings: color (categorical), size (numeric), symbol (categorical), facet_row/facet_col (categorical), animation_frame (temporal). Ensure all fields exist.
+6) CRITICAL: When referencing columns in spec.x, spec.y, spec.color, spec.size, spec.symbol, spec.facet_row, spec.facet_col, spec.animation_frame, use the EXACT column names from the schema (e.g., "assignee_organization", "inventor_name", not "assignee", "inventor").
 7) Order by impact and readability; validate placeholders.
 8) Assemble final JSON strictly matching the schema.
 
@@ -56,6 +57,12 @@ Output format (return ONLY JSON, no prose, no markdown):
         "x": "string (column)",
         "y": "string (column or aggregation)",
         "color": "string (column, optional)",
+        "size": "string (numeric column, optional)",
+        "symbol": "string (categorical column, optional)",
+        "facet_row": "string (categorical column, optional)",
+        "facet_col": "string (categorical column, optional)",
+        "animation_frame": "string (temporal/categorical column, optional)",
+        "hover": ["string (column)", "..."],
         "aggregation": "sum|avg|count|min|max|none"
       }
     }

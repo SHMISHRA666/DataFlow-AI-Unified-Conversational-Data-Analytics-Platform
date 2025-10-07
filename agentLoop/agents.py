@@ -17,6 +17,16 @@ class AgentRunner:
         with open(config_path, "r", encoding="utf-8") as f:
             self.agent_configs = yaml.safe_load(f)["agents"]
 
+    def _is_supported_for_gemini_upload(self, extension: str) -> bool:
+        """Return whether a file extension is supported for Gemini file/inline upload.
+
+        We explicitly skip Office spreadsheets which are not supported by Gemini uploads.
+        """
+        ext = (extension or "").lower()
+        if ext in [".xlsx", ".xls", ".xlsm"]:
+            return False
+        return True
+
     def _analyze_file_strategy(self, uploaded_files):
         """Analyze files to determine best upload strategy"""
         total_size = 0
@@ -109,6 +119,9 @@ class AgentRunner:
             if strategy == "inline_batch":
                 # For small files - use inline data
                 from google.genai import types
+                # Skip unsupported types for Gemini inline parts
+                if not self._is_supported_for_gemini_upload(path.suffix.lower()):
+                    return None
                 return types.Part.from_bytes(
                     data=path.read_bytes(),
                     mime_type=self._get_mime_type(path.suffix.lower())
@@ -171,10 +184,14 @@ class AgentRunner:
                 # log_step(f"📁 File strategy: {strategy} for {len(all_files)} files")
                 
                 # Initialize model manager for Files API uploads
-                model_manager = ModelManager(agent_config.get("model", "gemini-2.0-flash"))
+                model_manager = ModelManager(agent_config.get("model", "gemini"))
                 
                 # Process files based on strategy
                 for file_path in all_files:
+                    # Skip unsupported types (e.g., Excel) for Gemini to avoid INVALID_ARGUMENT
+                    if not self._is_supported_for_gemini_upload(Path(file_path).suffix.lower()):
+                        # Do not upload/inline; fall back to text-only prompt context
+                        continue
                     if strategy == "inline_batch":
                         # Load as inline data
                         content = self._load_file_content(file_path, strategy)
@@ -182,14 +199,18 @@ class AgentRunner:
                             file_contents.append(content)
                     else:
                         # Upload to Files API
-                        uploaded_file = model_manager.client.files.upload(
-                            file=file_path
-                        )
-                        file_contents.append(uploaded_file)
+                        try:
+                            uploaded_file = model_manager.client.files.upload(
+                                file=file_path
+                            )
+                            file_contents.append(uploaded_file)
+                        except Exception as upload_err:
+                            # If upload fails (e.g., unsupported mime), skip this file
+                            log_error(f"Files API upload skipped for {file_path}: {upload_err}")
                         # log_step(f"📤 Uploaded {file_path} to Files API")
             else:
                 # Initialize model manager for text-only requests
-                model_manager = ModelManager(agent_config.get("model", "gemini-2.0-flash"))
+                model_manager = ModelManager(agent_config.get("model", "gemini"))
 
             # Load system prompt
             prompt_file_path = agent_config.get('prompt_file')

@@ -249,7 +249,7 @@ STRICT RULES
 
 def maybe_polish_with_gemini(
     insights: List[Insight],
-    model: str = "gemini-1.5-flash",
+    model: str = "gemini",
     temperature: float = 0.2,
     max_chars: int = 900,
     verbose: bool=False
@@ -257,7 +257,7 @@ def maybe_polish_with_gemini(
     # This function requires a recent version of the google-generativeai library
     # If you get an error like "'google.generativeai' has no attribute 'GenerativeModel'",
     # update the library by running: pip install --upgrade google-generativeai
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         if verbose: print("ⓘ GEMINI_API_KEY not set; skipping polish")
         return insights
@@ -265,9 +265,18 @@ def maybe_polish_with_gemini(
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
+        # Resolve model from config if a key is provided (e.g., 'gemini')
+        try:
+            # When caller passes a key like 'gemini', look up concrete model name
+            from agentLoop.model_manager import MODELS_JSON
+            import json as _json
+            from pathlib import Path as _Path
+            cfg = _json.loads(_Path(MODELS_JSON).read_text())
+            model_name = cfg["models"].get(model, {}).get("model", model)
+        except Exception:
+            model_name = model
         # The line below is correct but requires an up-to-date library version.
-        # The error message indicates your installed version is too old.
-        gmodel = genai.GenerativeModel(model,  system_instruction=SYSTEM_INSTRUCTION)
+        gmodel = genai.GenerativeModel(model_name,  system_instruction=SYSTEM_INSTRUCTION)
         gen_cfg = {
                     "temperature": temperature,
                     "response_mime_type": "application/json",
@@ -561,7 +570,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--asset-map", type=Path, default=None, help="Optional JSON mapping viz_id -> {html_path|png_path|svg_path}")
     ap.add_argument("--out-dir", type=Path, default=Path("./out"), help="Output directory")
     ap.add_argument("--polish", action="store_true", help="Polish text via Gemini (requires GEMINI_API_KEY)")
-    ap.add_argument("--model", type=str, default="gemini-1.5-flash", help="Gemini model for polishing")
+    ap.add_argument("--model", type=str, default="gemini", help="Gemini model key from models.json for polishing")
     ap.add_argument("--verbose", action="store_true", help="Verbose logging")
     return ap.parse_args()
 

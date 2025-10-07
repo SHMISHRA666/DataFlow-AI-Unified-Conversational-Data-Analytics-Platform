@@ -709,126 +709,160 @@ class AgentLoop4:
         charts_yaml = out_dir / 'charts.yaml'
         insights_json = out_dir / 'narrative_insights.json'
 
+        # Determine export preference from conversation classification
+        # - If user explicitly asked for Report → only report
+        # - If user explicitly asked for Chart/Plotly → only plotly
+        # - If unspecified → generate both
+        export_mode = 'both'
+        try:
+            secondary_pref = None
+            # Prefer conversation planner classification from context
+            if context is not None:
+                conv_plan = (context.plan_graph.get('graph') or {}).get('conversation_plan') or {}
+                if isinstance(conv_plan, dict):
+                    secondary_pref = conv_plan.get('secondary_classification') or conv_plan.get('secondary')
+            # Fallback: check intelligence_output business_context
+            if not secondary_pref and isinstance(intelligence_output, dict):
+                bc = (intelligence_output.get('business_context') or {}) if isinstance(intelligence_output.get('business_context'), dict) else {}
+                secondary_pref = bc.get('secondary_classification') or bc.get('secondary')
+
+            if isinstance(secondary_pref, str):
+                pref = secondary_pref.strip().lower()
+                if pref == 'report':
+                    export_mode = 'report_only'
+                elif pref == 'chart':
+                    export_mode = 'plotly_only'
+            log_step(f"🔍 Export preference resolved: {export_mode}")
+        except Exception:
+            # Default to both on any error while detecting preference
+            export_mode = 'both'
+
         # 1) Plotly gallery export (optional; requires dataset + charts.yaml)
         try:
-            # Ensure .env variables are loaded (PLOTLY_USERNAME, PLOTLY_API_KEY)
-            try:
-                load_dotenv()
-            except Exception:
-                pass
-            
-            # Debug: Log export layer status
-            log_step(f"🔍 Export Layer Debug - Session ID: {session_id}")
-            log_step(f"🔍 Export Layer Debug - Output Dir: {out_dir}")
-            log_step(f"🔍 Export Layer Debug - Charts YAML exists: {charts_yaml.exists()}")
-            log_step(f"🔍 Export Layer Debug - Insights JSON exists: {insights_json.exists()}")
-            
-            if _plotly_build_report and charts_yaml.exists():
-                dataset_path: Path | None = None
-                # If a context is available (DAG step), try to infer from file_manifest
-                if context is not None:
-                    dataset_path = self._select_dataset_path_for_export(context)
-                # Final fallback: None -> skip Plotly export
-                if dataset_path and dataset_path.exists():
-                    # Load DataFrame from CSV or Excel
-                    df = None
-                    if dataset_path.suffix.lower() == '.csv':
-                        df = _plotly_load_csv(str(dataset_path)) if _plotly_load_csv else None
-                    elif dataset_path.suffix.lower() in ('.xlsx', '.xls'):
-                        try:
-                            df = pd.read_excel(str(dataset_path))
-                        except Exception as e:
-                            log_error(f"Failed to read Excel dataset for Plotly export: {e}")
-                    guide = _plotly_load_guide(str(charts_yaml)) if _plotly_load_guide else None
-                    if df is not None and guide is not None:
-                        # Ensure a unique Chart Studio filename per session/run to avoid overwriting
-                        try:
-                            from datetime import datetime
-                            safe_title = str(guide.get('report_title') or 'plotly-report').replace(' ', '-').lower()
-                            # Remove special characters and truncate title to prevent Chart Studio 100-char limit
-                            import re
-                            safe_title = re.sub(r'[^\w\-_]', '', safe_title)  # Remove special chars
-                            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-                            session_suffix = f"-{session_id}-{ts}" if session_id else f"-{ts}"
-                            # Ensure total filename stays under 100 characters for Chart Studio
-                            max_title_len = 95 - len(session_suffix)  # Leave 5 chars buffer
-                            if len(safe_title) > max_title_len:
-                                safe_title = safe_title[:max_title_len]
-                            unique_name = f"{safe_title}{session_suffix}"
-                            guide['filename'] = unique_name
-                        except Exception:
-                            # Best-effort; if this fails, plotly_v6 will still derive a name
-                            pass
-                        # Filter out failed charts from the guide
-                        guide = self._filter_failed_charts_from_guide(guide, intelligence_output)
-                        # Modify guide to match chart executor's raw data approach
-                        guide = self._modify_guide_for_raw_data(guide, intelligence_output)
-                        log_step(f"🔍 Export Layer: Data loaded ({len(df)} rows), guide loaded", symbol="✅")
-                        out_html = str(out_dir / 'plotly_index.html')
-                        # Initialize Chart Studio publishing if credentials are available
-                        publish_py = None
-                        if _plotly_init_cs is not None:
+            if export_mode in ('both', 'plotly_only'):
+                # Ensure .env variables are loaded (PLOTLY_USERNAME, PLOTLY_API_KEY)
+                try:
+                    load_dotenv()
+                except Exception:
+                    pass
+                
+                # Debug: Log export layer status
+                log_step(f"🔍 Export Layer Debug - Session ID: {session_id}")
+                log_step(f"🔍 Export Layer Debug - Output Dir: {out_dir}")
+                log_step(f"🔍 Export Layer Debug - Charts YAML exists: {charts_yaml.exists()}")
+                log_step(f"🔍 Export Layer Debug - Insights JSON exists: {insights_json.exists()}")
+                
+                if _plotly_build_report and charts_yaml.exists():
+                    dataset_path: Path | None = None
+                    # If a context is available (DAG step), try to infer from file_manifest
+                    if context is not None:
+                        dataset_path = self._select_dataset_path_for_export(context)
+                    # Final fallback: None -> skip Plotly export
+                    if dataset_path and dataset_path.exists():
+                        # Load DataFrame from CSV or Excel
+                        df = None
+                        if dataset_path.suffix.lower() == '.csv':
+                            df = _plotly_load_csv(str(dataset_path)) if _plotly_load_csv else None
+                        elif dataset_path.suffix.lower() in ('.xlsx', '.xls'):
                             try:
-                                # Prefer env vars PLOTLY_USERNAME/PLOTLY_API_KEY; passing None uses env in init_chart_studio
-                                publish_py = _plotly_init_cs(None, None, None)
+                                df = pd.read_excel(str(dataset_path))
                             except Exception as e:
-                                # Credentials missing or package not installed; proceed without publishing
-                                log_error(f"Chart Studio init skipped: {e}")
-                        urls = _plotly_build_report(
-                            df,
-                            guide,
-                            out_html,
-                            publish_py=publish_py,
-                            publish_sharing='public',
-                            no_html=False,
-                            publish_combined=True,
-                            publish_cols=1,
-                            publish_row_height=520,
-                            publish_vspace=0.20,
-                            publish_auto_layout=True,
-                            publish_row_height_weights=None,
-                            publish_hspace=0.08,
-                            publish_width=None,
-                            publish_col_width_weights=None,
-                        )
-                        exports['plotly_html_path'] = out_html
-                        
-                        # If no URLs were generated (Chart Studio not available), skip export
-                        if not urls:
-                            log_step("⚠️ Chart Studio not available, skipping plotly export", symbol="🔄")
-                        
-                        if urls:
-                            exports['chart_studio_urls'] = urls
-                            # ✅ Display complete dashboard plotly link in console
-                            log_step(f"🎉 Export Agent created complete dashboard with {len(urls)} plotly links", symbol="📊")
-                            for name, url in urls:
-                                log_step(f"🌐 Complete Dashboard Plotly Link: {url}", symbol="🔗")
-                            # Mirror the combined URL into the intelligence output so callers always have it
+                                log_error(f"Failed to read Excel dataset for Plotly export: {e}")
+                        guide = _plotly_load_guide(str(charts_yaml)) if _plotly_load_guide else None
+                        if df is not None and guide is not None:
+                            # Ensure a unique Chart Studio filename per session/run to avoid overwriting
                             try:
-                                if isinstance(intelligence_output, dict):
-                                    intelligence_output.setdefault('exports', {})['chart_studio_urls'] = urls
+                                from datetime import datetime
+                                safe_title = str(guide.get('report_title') or 'plotly-report').replace(' ', '-').lower()
+                                # Remove special characters and truncate title to prevent Chart Studio 100-char limit
+                                import re
+                                safe_title = re.sub(r'[^\w\-_]', '', safe_title)  # Remove special chars
+                                ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                                session_suffix = f"-{session_id}-{ts}" if session_id else f"-{ts}"
+                                # Ensure total filename stays under 100 characters for Chart Studio
+                                max_title_len = 95 - len(session_suffix)  # Leave 5 chars buffer
+                                if len(safe_title) > max_title_len:
+                                    safe_title = safe_title[:max_title_len]
+                                unique_name = f"{safe_title}{session_suffix}"
+                                guide['filename'] = unique_name
                             except Exception:
+                                # Best-effort; if this fails, plotly_v6 will still derive a name
                                 pass
-                        else:
-                            log_step("⚠️ Export Agent: No plotly URLs generated", symbol="⚠️")
+                            # Filter out failed charts from the guide
+                            guide = self._filter_failed_charts_from_guide(guide, intelligence_output)
+                            # Modify guide to match chart executor's raw data approach
+                            guide = self._modify_guide_for_raw_data(guide, intelligence_output)
+                            log_step(f"🔍 Export Layer: Data loaded ({len(df)} rows), guide loaded", symbol="✅")
+                            out_html = str(out_dir / 'plotly_index.html')
+                            # Initialize Chart Studio publishing if credentials are available
+                            publish_py = None
+                            if _plotly_init_cs is not None:
+                                try:
+                                    # Prefer env vars PLOTLY_USERNAME/PLOTLY_API_KEY; passing None uses env in init_chart_studio
+                                    publish_py = _plotly_init_cs(None, None, None)
+                                except Exception as e:
+                                    # Credentials missing or package not installed; proceed without publishing
+                                    log_error(f"Chart Studio init skipped: {e}")
+                            urls = _plotly_build_report(
+                                df,
+                                guide,
+                                out_html,
+                                publish_py=publish_py,
+                                publish_sharing='public',
+                                no_html=False,
+                                publish_combined=True,
+                                publish_cols=1,
+                                publish_row_height=520,
+                                publish_vspace=0.20,
+                                publish_auto_layout=True,
+                                publish_row_height_weights=None,
+                                publish_hspace=0.08,
+                                publish_width=None,
+                                publish_col_width_weights=None,
+                            )
+                            exports['plotly_html_path'] = out_html
+                            
+                            # If no URLs were generated (Chart Studio not available), skip export
+                            if not urls:
+                                log_step("⚠️ Chart Studio not available, skipping plotly export", symbol="🔄")
+                            
+                            if urls:
+                                exports['chart_studio_urls'] = urls
+                                # ✅ Display complete dashboard plotly link in console
+                                log_step(f"🎉 Export Agent created complete dashboard with {len(urls)} plotly links", symbol="📊")
+                                for name, url in urls:
+                                    log_step(f"🌐 Complete Dashboard Plotly Link: {url}", symbol="🔗")
+                                # Mirror the combined URL into the intelligence output so callers always have it
+                                try:
+                                    if isinstance(intelligence_output, dict):
+                                        intelligence_output.setdefault('exports', {})['chart_studio_urls'] = urls
+                                except Exception:
+                                    pass
+                            else:
+                                log_step("⚠️ Export Agent: No plotly URLs generated", symbol="⚠️")
+            else:
+                log_step("ℹ️ Skipping Plotly export due to user preference (report only)")
         except Exception as e:
             log_error(f"Plotly export failed: {e}")
 
         # 2) Executive report export via report_agent (insights + assets)
         try:
-            if _ra_load_report and insights_json.exists():
-                report = _ra_load_report(insights_json, verbose=False)
-                asset_dirs = [out_dir / 'html', out_dir / 'png', out_dir / 'svg']
-                explicit_map = _ra_load_asset_map(None) if _ra_load_asset_map else {}
-                report.insights, _ = _ra_resolve_assets(report.insights, asset_dirs, explicit_map, verbose=False)  # type: ignore[arg-type]
-                html_path, resolved_path = _ra_write_outputs(
-                    report,
-                    out_dir,
-                    verbose=False,
-                    chart_studio_urls=exports.get('chart_studio_urls')
-                )
-                exports['report_html_path'] = str(html_path)
-                exports['resolved_insights_path'] = str(resolved_path)
+            if export_mode in ('both', 'report_only'):
+                if _ra_load_report and insights_json.exists():
+                    report = _ra_load_report(insights_json, verbose=False)
+                    asset_dirs = [out_dir / 'html', out_dir / 'png', out_dir / 'svg']
+                    explicit_map = _ra_load_asset_map(None) if _ra_load_asset_map else {}
+                    report.insights, _ = _ra_resolve_assets(report.insights, asset_dirs, explicit_map, verbose=False)  # type: ignore[arg-type]
+                    html_path, resolved_path = _ra_write_outputs(
+                        report,
+                        out_dir,
+                        verbose=False,
+                        chart_studio_urls=exports.get('chart_studio_urls')
+                    )
+                    exports['report_html_path'] = str(html_path)
+                    exports['resolved_insights_path'] = str(resolved_path)
+            else:
+                log_step("ℹ️ Skipping Report export due to user preference (plotly only)")
         except Exception as e:
             log_error(f"Executive report export failed: {e}")
 
@@ -1035,6 +1069,33 @@ class AgentLoop4:
                 "top_k_results": results,
                 **({"answer": answer} if answer is not None else {})
             }
+
+            # Expose RAG answer at graph level for easy UI/console access
+            try:
+                if answer is not None:
+                    context.plan_graph['graph']['rag_answer'] = answer
+            except Exception:
+                pass
+
+            # Persist RAG answer to per-session folder like other layers
+            try:
+                from pathlib import Path as __Path
+                import json as __json
+                sess_out_dir = __Path('generated_charts') / (str(session_id) if session_id else '')
+                sess_out_dir.mkdir(parents=True, exist_ok=True)
+                rag_answer_path = sess_out_dir / 'rag_answer.json'
+                to_write = {
+                    "query": user_query,
+                    "answer": answer,
+                    "files_processed": [str(_P(f).name) for f in copied_files],
+                    "faiss_index_dir": str(faiss_dir),
+                    "top_k_results": results,
+                }
+                rag_answer_path.write_text(__json.dumps(to_write, ensure_ascii=False, indent=2), encoding='utf-8')
+                # Reference path in response for downstream consumers (UI)
+                rag_response["rag_answer_path"] = str(rag_answer_path)
+            except Exception as persist_err:
+                log_error(f"Failed to persist rag_answer.json: {persist_err}")
 
             log_step("✅ RAG processing completed", symbol="📚")
 

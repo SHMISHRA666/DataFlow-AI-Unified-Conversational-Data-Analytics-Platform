@@ -5,6 +5,21 @@ import asyncio
 from dotenv import load_dotenv
 from agentLoop.flow import AgentLoop4
 from pathlib import Path
+import sys
+import os
+
+# Ensure UTF-8 console on Windows to avoid 'charmap' codec errors
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+if os.name == "nt":
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
 
 BANNER = """
 ──────────────────────────────────────────────────────

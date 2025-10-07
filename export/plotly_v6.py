@@ -202,14 +202,30 @@ def expand_auto_aliases(spec: Dict[str, Any], schema: Dict[str, List[str]]):
     def map_list(lst):
         return [map_value(x) for x in lst]
 
-    # Map common scalar fields
-    for k in ["x", "y", "color", "size", "value"]:
+    # Map common scalar fields (extended for multi-encoding)
+    for k in [
+        "x",
+        "y",
+        "color",
+        "size",
+        "value",
+        "symbol",
+        "facet_row",
+        "facet_col",
+        "animation_frame",
+        "animation_group",
+        "names",
+    ]:
         if k in spec:
             spec[k] = map_value(spec[k])
 
     # Map list fields like treemap path
     if isinstance(spec.get("path"), list):
         spec["path"] = [map_value(p) for p in spec["path"]]
+
+    # Map hover list if present
+    if isinstance(spec.get("hover"), list):
+        spec["hover"] = [map_value(h) for h in spec["hover"]]
 
     # Map inside aggregates/top_n/pivot if present
     agg = spec.get("aggregate")
@@ -371,7 +387,27 @@ def build_line(df, spec, schema):
     color = spec.get("color")
     if color not in data.columns: color = None
 
-    fig = px.line(data, x=spec["x"], y=spec["y"], color=color, markers=spec.get("markers", True))
+    facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+    facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+    animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
+    hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+    line_group = spec.get("symbol") if isinstance(spec.get("symbol"), str) and spec.get("symbol") in data.columns else None
+
+    fig = px.line(
+        data,
+        x=spec["x"],
+        y=spec["y"],
+        color=color,
+        markers=spec.get("markers", True),
+        facet_row=facet_row,
+        facet_col=facet_col,
+        animation_frame=animation_frame,
+        hover_data=(hover_data or None),
+        line_group=line_group,
+        color_discrete_sequence=spec.get("color_discrete_sequence"),
+        color_continuous_scale=spec.get("color_continuous_scale"),
+        opacity=spec.get("opacity")
+    )
     return style_fig(fig, spec)
 
 
@@ -412,8 +448,25 @@ def build_bar(df, spec, schema):
             if color == x_name or color not in agg_df.columns:
                 color = None
             barmode = "stack" if spec.get("stack", False) else "group"
-            fig = px.bar(agg_df, x=x_name, y="value", color=color, barmode=barmode,
-                         text_auto=spec.get("text_auto", False))
+            facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in agg_df.columns else None
+            facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in agg_df.columns else None
+            animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in agg_df.columns else None
+            hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in agg_df.columns]
+            fig = px.bar(
+                agg_df,
+                x=x_name,
+                y="value",
+                color=color,
+                barmode=barmode,
+                text_auto=spec.get("text_auto", False),
+                facet_row=facet_row,
+                facet_col=facet_col,
+                animation_frame=animation_frame,
+                hover_data=(hover_data or None),
+                color_discrete_sequence=spec.get("color_discrete_sequence"),
+                color_continuous_scale=spec.get("color_continuous_scale"),
+                opacity=spec.get("opacity")
+            )
             fig.update_yaxes(title_text="count")
             return style_fig(fig, spec)
         else:
@@ -429,8 +482,25 @@ def build_bar(df, spec, schema):
                 if color == x_name or color not in agg_df.columns:
                     color = None
                 barmode = "stack" if spec.get("stack", False) else "group"
-                fig = px.bar(agg_df, x=x_name, y="value", color=color, barmode=barmode,
-                             text_auto=spec.get("text_auto", False))
+                facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in agg_df.columns else None
+                facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in agg_df.columns else None
+                animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in agg_df.columns else None
+                hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in agg_df.columns]
+                fig = px.bar(
+                    agg_df,
+                    x=x_name,
+                    y="value",
+                    color=color,
+                    barmode=barmode,
+                    text_auto=spec.get("text_auto", False),
+                    facet_row=facet_row,
+                    facet_col=facet_col,
+                    animation_frame=animation_frame,
+                    hover_data=(hover_data or None),
+                    color_discrete_sequence=spec.get("color_discrete_sequence"),
+                    color_continuous_scale=spec.get("color_continuous_scale"),
+                    opacity=spec.get("opacity")
+                )
                 fig.update_yaxes(title_text=y_name)
                 return style_fig(fig, spec)
             # No explicit aggregation: just plot cleaned data
@@ -440,8 +510,25 @@ def build_bar(df, spec, schema):
             if color not in data.columns:
                 color = None
             barmode = "stack" if spec.get("stack", False) else "group"
-            fig = px.bar(data, x=x_name, y=y_name if has_y else None, color=color, barmode=barmode,
-                         text_auto=spec.get("text_auto", False))
+            facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+            facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+            animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
+            hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+            fig = px.bar(
+                data,
+                x=x_name,
+                y=y_name if has_y else None,
+                color=color,
+                barmode=barmode,
+                text_auto=spec.get("text_auto", False),
+                facet_row=facet_row,
+                facet_col=facet_col,
+                animation_frame=animation_frame,
+                hover_data=(hover_data or None),
+                color_discrete_sequence=spec.get("color_discrete_sequence"),
+                color_continuous_scale=spec.get("color_continuous_scale"),
+                opacity=spec.get("opacity")
+            )
             return style_fig(fig, spec)
     except Exception:
         pass
@@ -449,8 +536,25 @@ def build_bar(df, spec, schema):
     # Fallback: try plotting whatever we have
     color = spec.get("color") if spec.get("color") in data.columns else None
     barmode = "stack" if spec.get("stack", False) else "group"
-    fig = px.bar(data, x=x_name, y=y_name, color=color, barmode=barmode,
-                 text_auto=spec.get("text_auto", False))
+    facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+    facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+    animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
+    hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+    fig = px.bar(
+        data,
+        x=x_name,
+        y=y_name,
+        color=color,
+        barmode=barmode,
+        text_auto=spec.get("text_auto", False),
+        facet_row=facet_row,
+        facet_col=facet_col,
+        animation_frame=animation_frame,
+        hover_data=(hover_data or None),
+        color_discrete_sequence=spec.get("color_discrete_sequence"),
+        color_continuous_scale=spec.get("color_continuous_scale"),
+        opacity=spec.get("opacity")
+    )
     # Enforce stable categorical ordering for readability across backends
     try:
         fig.update_xaxes(categoryorder="total descending")
@@ -470,13 +574,32 @@ def build_scatter(df, spec, schema):
     if spec.get("x") is None or spec.get("y") is None: return fallback_table(df, spec, schema)
 
     data = prepare_chart_data(df, spec, schema)
-    color = spec.get("color");  size = spec.get("size")
+    color = spec.get("color");  size = spec.get("size"); symbol = spec.get("symbol")
     if color not in data.columns: color = None
     if size  not in data.columns: size  = None
+    if symbol not in data.columns: symbol = None
 
-    fig = px.scatter(data, x=spec["x"], y=spec["y"], color=color, size=size,
-                     hover_data=spec.get("hover", []),
-                     trendline="ols" if spec.get("trendline") else None)
+    facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+    facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+    animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
+    hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+
+    fig = px.scatter(
+        data,
+        x=spec["x"],
+        y=spec["y"],
+        color=color,
+        size=size,
+        symbol=symbol,
+        hover_data=(hover_data or None),
+        trendline="ols" if spec.get("trendline") else None,
+        facet_row=facet_row,
+        facet_col=facet_col,
+        animation_frame=animation_frame,
+        color_discrete_sequence=spec.get("color_discrete_sequence"),
+        color_continuous_scale=spec.get("color_continuous_scale"),
+        opacity=spec.get("opacity")
+    )
     return style_fig(fig, spec)
 
 def build_heatmap(df, spec, schema):
@@ -510,7 +633,15 @@ def build_treemap(df, spec, schema):
     path = [p for p in spec["path"] if p in data.columns]
     if not path or spec["value"] not in data.columns: return fallback_table(df, spec, schema)
     try:
-        fig = px.treemap(data, path=path, values=spec["value"])
+        color = spec.get("color") if spec.get("color") in data.columns else None
+        fig = px.treemap(
+            data,
+            path=path,
+            values=spec["value"],
+            color=color,
+            color_discrete_sequence=spec.get("color_discrete_sequence"),
+            color_continuous_scale=spec.get("color_continuous_scale"),
+        )
     except Exception:
         return fallback_table(df, spec, schema)
     return style_fig(fig, spec)
@@ -562,7 +693,26 @@ def build_histogram(df, spec, schema):
     nbins = spec.get("nbins") or 20
     barmode = "relative" if spec.get("stack") else ("overlay" if spec.get("overlay") else None)
 
-    fig = px.histogram(data, x=x, y=ycol, color=color, nbins=nbins, histfunc=histfunc, barmode=barmode)
+    facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+    facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+    animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
+    hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+    fig = px.histogram(
+        data,
+        x=x,
+        y=ycol,
+        color=color,
+        nbins=nbins,
+        histfunc=histfunc,
+        barmode=barmode,
+        facet_row=facet_row,
+        facet_col=facet_col,
+        animation_frame=animation_frame,
+        hover_data=(hover_data or None),
+        color_discrete_sequence=spec.get("color_discrete_sequence"),
+        color_continuous_scale=spec.get("color_continuous_scale"),
+        opacity=spec.get("opacity")
+    )
     return style_fig(fig, spec)
 
 def build_pie(df, spec, schema):
@@ -590,7 +740,19 @@ def build_pie(df, spec, schema):
     values = "count"
 
     try:
-        fig = px.pie(data, names=names, values=values, hole=spec.get("hole", 0))
+        hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
+        facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
+        facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
+        fig = px.pie(
+            data,
+            names=names,
+            values=values,
+            hole=spec.get("hole", 0),
+            hover_data=(hover_data or None),
+            facet_row=facet_row,
+            facet_col=facet_col,
+            color_discrete_sequence=spec.get("color_discrete_sequence")
+        )
     except Exception:
         return fallback_table(df, spec, schema)
     return style_fig(fig, spec)

@@ -50,8 +50,17 @@ CHUNK_SIZE_WORDS = int(os.getenv("CHUNK_SIZE_WORDS", "256"))
 CHUNK_OVERLAP_WORDS = int(os.getenv("CHUNK_OVERLAP_WORDS", "40"))
 TOP_K = int(os.getenv("TOP_K", "5"))
 
-# Configure Gemini
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+# Configure Gemini API key (compat with env var names)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+
+# Resolve model name via models.json key 'gemini'
+try:
+    from agentLoop.model_manager import MODELS_JSON
+    _models_cfg = json.loads(Path(MODELS_JSON).read_text())
+    GEMINI_MODEL_NAME = _models_cfg["models"]["gemini"]["model"]
+except Exception:
+    # Fallback to a reasonable default
+    GEMINI_MODEL_NAME = "gemini-2.5-pro"
 
 # Ensure folders
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -71,7 +80,7 @@ Context:
 
 User question: {query}
 """
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel(GEMINI_MODEL_NAME)
     response = model.generate_content(prompt)
     return response.text
 
@@ -122,10 +131,10 @@ def caption_image(image_path: Path, use_gemini: bool = False) -> str:
 
     # 2) Gemini fallback
     # if use_gemini and os.getenv("GOOGLE_API_KEY"):   ##Enable it to specifically use gemini for image with no text in it
-    if os.getenv("GOOGLE_API_KEY"):                    ##If Gemini API key is configure, then the solution will use it.
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):                    ##If Gemini API key is configure, then the solution will use it.
         try:
             file_obj = genai.upload_file(path=str(image_path))
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel(GEMINI_MODEL_NAME)
             response = model.generate_content([
                 "If there is text in this image, transcribe it exactly. "
                 "Otherwise, describe the image in one concise sentence.",
@@ -208,7 +217,7 @@ def build_and_save_faiss(embeddings: List[np.ndarray], metadata: List[Dict[str, 
     idx_path = out_dir / "index.bin"
     meta_path = out_dir / "metadata.json"
     faiss.write_index(index, str(idx_path))
-    meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
+    meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     log(f"Saved FAISS index -> {idx_path} and metadata -> {meta_path}")
 
 
@@ -330,7 +339,7 @@ def load_index_and_metadata(index_dir: Path) -> Tuple[Any, List[Dict[str, Any]]]
     if not idx_path.exists() or not meta_path.exists():
         raise FileNotFoundError("Index or metadata not found. Run ingest first.")
     index = faiss.read_index(str(idx_path))
-    metadata = json.loads(meta_path.read_text())
+    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
     return index, metadata
 
 def search(query: str, k: int = TOP_K):

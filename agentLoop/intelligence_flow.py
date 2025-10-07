@@ -392,16 +392,31 @@ class IntelligenceLayer:
             x_field = spec.get("x")
             y_field, agg_norm = _parse_y_and_agg(spec.get("y"), spec.get("aggregation"))
             color_field = spec.get("color")
+            size_field = spec.get("size")
+            symbol_field = spec.get("symbol")
+            facet_row = spec.get("facet_row")
+            facet_col = spec.get("facet_col")
+            animation_frame = spec.get("animation_frame")
 
             if x_field:
                 chart_entry["x"] = f"${x_field}"
-            # For bar/line/scatter include y/agg/color; for pie/histogram keep it minimal
+            # For bar/line/scatter include y/agg/color/size/symbol/facets; for pie/histogram keep it minimal
             if vtype not in ["pie", "histogram"]:
                 if y_field:
                     chart_entry["y"] = f"${y_field}"
                 # Avoid color=x duplication
                 if color_field and color_field != x_field:
                     chart_entry["color"] = f"${color_field}"
+                if size_field and size_field not in (x_field, y_field):
+                    chart_entry["size"] = f"${size_field}"
+                if symbol_field and symbol_field not in (x_field, y_field):
+                    chart_entry["symbol"] = f"${symbol_field}"
+                if facet_row and facet_row not in (x_field, y_field):
+                    chart_entry["facet_row"] = f"${facet_row}"
+                if facet_col and facet_col not in (x_field, y_field):
+                    chart_entry["facet_col"] = f"${facet_col}"
+                if animation_frame and animation_frame not in (x_field, y_field):
+                    chart_entry["animation_frame"] = f"${animation_frame}"
                 # Always emit explicit aggregation for non-domain charts when available
                 if agg_norm:
                     chart_entry["agg"] = agg_norm
@@ -422,7 +437,7 @@ class IntelligenceLayer:
         # Build columns alias map from the actual fields used (exclude computed names like 'count')
         alias_fields = set()
         for item in charts_yaml_list:
-            for key in ["x", "y", "color", "value"]:
+            for key in ["x", "y", "color", "value", "size", "symbol", "facet_row", "facet_col", "animation_frame"]:
                 val = item.get(key)
                 if isinstance(val, str) and val.startswith("$"):
                     alias_fields.add(val[1:])

@@ -310,8 +310,85 @@ html_path = output_dir / "html" / f"{chart_id}.html"
 """ + self.build_df_loader_preamble(data_context) + """
 
 try:
-    # Execute original code
-""" + self._indent_code(original_code, 4) + """
+    # Execute original code (with treemap fallback if it fails)
+    __orig_ok = False
+    try:
+""" + self._indent_code(original_code, 8) + """
+        __orig_ok = True
+    except Exception as __orig_err:
+        # Attempt treemap-specific recovery using spec and df; avoid hardcoded columns
+        try:
+            import json as __json
+            __spec = __json.loads(r'''__SPEC_LITERAL__''')
+            __ctype = str((__spec or {}).get('type') or '').lower()
+            if __ctype == 'treemap' and isinstance(df, pd.DataFrame):
+                __y_raw = (__spec or {}).get('y') or (__spec or {}).get('value')
+                __agg = str(((__spec or {}).get('aggregation') or (__spec or {}).get('agg') or 'sum')).lower()
+                __path_spec = (__spec or {}).get('path')
+
+                # Parse potential y like 'sum(col)'
+                __y_col = None
+                if isinstance(__y_raw, str) and '(' in __y_raw and ')' in __y_raw:
+                    __y_col = __y_raw.split('(', 1)[1].rsplit(')', 1)[0].strip()
+                elif isinstance(__y_raw, str):
+                    __y_col = __y_raw
+
+                # Build candidate path dimensions
+                __dims = []
+                if isinstance(__path_spec, (list, tuple)):
+                    for __c in __path_spec:
+                        if isinstance(__c, str) and __c in df.columns and __c not in __dims:
+                            __dims.append(__c)
+                if not __dims:
+                    for __c in [(__spec or {}).get('color'), (__spec or {}).get('x')]:
+                        if isinstance(__c, str) and __c in df.columns and __c not in __dims:
+                            __dims.append(__c)
+                if not __dims:
+                    # Infer up to 2 categorical dimensions from dataframe
+                    try:
+                        __cat_cols = [c for c in df.columns if getattr(df[c].dtype, 'name', '') in ('object', 'category')]
+                    except Exception:
+                        __cat_cols = []
+                    for __c in __cat_cols:
+                        if __c != __y_col and __c not in __dims:
+                            __dims.append(__c)
+                        if len(__dims) >= 2:
+                            break
+
+                __df = df.copy()
+                if __y_col and __y_col in __df.columns:
+                    __df[__y_col] = pd.to_numeric(__df[__y_col], errors='coerce')
+                    __df = __df.dropna(subset=[__y_col])
+
+                if __dims:
+                    # Aggregate values according to spec
+                    if __y_col and __y_col in __df.columns and __agg in ('sum', 'avg', 'mean', 'min', 'max', 'count', 'size'):
+                        __func = 'mean' if __agg in ('avg', 'mean') else (__agg if __agg not in ('count', 'size') else 'size')
+                        if __func == 'size':
+                            __agg_df = __df.groupby(__dims).size().reset_index(name='value')
+                        else:
+                            __agg_df = __df.groupby(__dims)[__y_col].agg(__func).reset_index(name='value')
+                    else:
+                        __agg_df = __df.groupby(__dims).size().reset_index(name='value')
+
+                    # Avoid empty-string/NaN path components that cause non-leaf errors
+                    for __d in __dims:
+                        if __d in __agg_df.columns:
+                            try:
+                                __agg_df[__d] = __agg_df[__d].fillna('Unknown')
+                            except Exception:
+                                pass
+
+                    import plotly.express as __px  # type: ignore
+                    fig = __px.treemap(__agg_df, path=__dims, values='value', title=(__spec or {}).get('title') or None)
+                    __orig_ok = True
+                else:
+                    raise __orig_err
+            else:
+                raise __orig_err
+        except Exception:
+            # If recovery failed, re-raise the original error
+            raise __orig_err
 
     # Auto-fix: normalize problematic bar charts (y-axis scaling too large)
     # Heuristics:
