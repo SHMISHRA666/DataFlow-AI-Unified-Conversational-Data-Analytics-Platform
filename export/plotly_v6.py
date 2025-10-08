@@ -103,6 +103,18 @@ def _is_domain_trace_type(t: str) -> bool:
     return t in {"pie","treemap","sunburst","icicle","table","funnelarea",
                  "parcats","parcoords","sankey","indicator"}
 
+# Safely call plotly.express functions by filtering unsupported kwargs dynamically
+def _safe_px_call(func, **kwargs):
+    try:
+        from inspect import signature
+        sig = signature(func)
+        valid = set(sig.parameters.keys())
+        filtered = {k: v for k, v in kwargs.items() if k in valid and v is not None}
+        return func(**filtered)
+    except Exception:
+        # Best-effort fallback; may raise if kwargs invalid
+        return func(**{k: v for k, v in kwargs.items() if v is not None})
+
 def load_any_csv(csv_path: str, try_parse_dates: bool = True) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     for c in df.columns:
@@ -393,8 +405,9 @@ def build_line(df, spec, schema):
     hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
     line_group = spec.get("symbol") if isinstance(spec.get("symbol"), str) and spec.get("symbol") in data.columns else None
 
-    fig = px.line(
-        data,
+    fig = _safe_px_call(
+        px.line,
+        data_frame=data,
         x=spec["x"],
         y=spec["y"],
         color=color,
@@ -452,8 +465,9 @@ def build_bar(df, spec, schema):
             facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in agg_df.columns else None
             animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in agg_df.columns else None
             hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in agg_df.columns]
-            fig = px.bar(
-                agg_df,
+            fig = _safe_px_call(
+                px.bar,
+                data_frame=agg_df,
                 x=x_name,
                 y="value",
                 color=color,
@@ -486,8 +500,9 @@ def build_bar(df, spec, schema):
                 facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in agg_df.columns else None
                 animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in agg_df.columns else None
                 hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in agg_df.columns]
-                fig = px.bar(
-                    agg_df,
+                fig = _safe_px_call(
+                    px.bar,
+                    data_frame=agg_df,
                     x=x_name,
                     y="value",
                     color=color,
@@ -514,8 +529,9 @@ def build_bar(df, spec, schema):
             facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
             animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
             hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
-            fig = px.bar(
-                data,
+            fig = _safe_px_call(
+                px.bar,
+                data_frame=data,
                 x=x_name,
                 y=y_name if has_y else None,
                 color=color,
@@ -540,8 +556,9 @@ def build_bar(df, spec, schema):
     facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
     animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
     hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
-    fig = px.bar(
-        data,
+    fig = _safe_px_call(
+        px.bar,
+        data_frame=data,
         x=x_name,
         y=y_name,
         color=color,
@@ -584,8 +601,9 @@ def build_scatter(df, spec, schema):
     animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
     hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
 
-    fig = px.scatter(
-        data,
+    fig = _safe_px_call(
+        px.scatter,
+        data_frame=data,
         x=spec["x"],
         y=spec["y"],
         color=color,
@@ -634,8 +652,9 @@ def build_treemap(df, spec, schema):
     if not path or spec["value"] not in data.columns: return fallback_table(df, spec, schema)
     try:
         color = spec.get("color") if spec.get("color") in data.columns else None
-        fig = px.treemap(
-            data,
+        fig = _safe_px_call(
+            px.treemap,
+            data_frame=data,
             path=path,
             values=spec["value"],
             color=color,
@@ -697,8 +716,9 @@ def build_histogram(df, spec, schema):
     facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
     animation_frame = spec.get("animation_frame") if isinstance(spec.get("animation_frame"), str) and spec.get("animation_frame") in data.columns else None
     hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
-    fig = px.histogram(
-        data,
+    fig = _safe_px_call(
+        px.histogram,
+        data_frame=data,
         x=x,
         y=ycol,
         color=color,
@@ -743,8 +763,9 @@ def build_pie(df, spec, schema):
         hover_data = [h for h in (spec.get("hover") or []) if isinstance(h, str) and h in data.columns]
         facet_row = spec.get("facet_row") if isinstance(spec.get("facet_row"), str) and spec.get("facet_row") in data.columns else None
         facet_col = spec.get("facet_col") if isinstance(spec.get("facet_col"), str) and spec.get("facet_col") in data.columns else None
-        fig = px.pie(
-            data,
+        fig = _safe_px_call(
+            px.pie,
+            data_frame=data,
             names=names,
             values=values,
             hole=spec.get("hole", 0),

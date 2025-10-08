@@ -180,65 +180,100 @@ class ChartExecutor:
             return repr(str(path))
 
         if isinstance(data_context, dict):
+            import json as _json
+            _parse_candidates_literal = _json.dumps(data_context.get("parse_dates_columns") or [])
+            _post_date_code = (
+                "__parse_candidates = " + _parse_candidates_literal + "\n"
+                "try:\n"
+                "    __cand_set = set(__parse_candidates) if isinstance(__parse_candidates, (list, tuple)) else set()\n"
+                "except Exception:\n"
+                "    __cand_set = set()\n"
+                "# Attempt robust parsing of date-like columns (no hardcoded names)\n"
+                "for __col in list(df.columns):\n"
+                "    __s = df[__col]\n"
+                "    __dtype_str = str(getattr(__s, 'dtype', ''))\n"
+                "    __is_object = (__dtype_str == 'object')\n"
+                "    if __is_object or (__col in __cand_set):\n"
+                "        try:\n"
+                "            __parsed = pd.to_datetime(__s, errors='coerce')\n"
+                "        except Exception:\n"
+                "            try:\n"
+                "                __parsed = pd.to_datetime(__s.astype(str), errors='coerce')\n"
+                "            except Exception:\n"
+                "                __parsed = None\n"
+                "        if __parsed is not None and getattr(__parsed, 'notna', lambda: pd.Series([]))().mean() > 0.6:\n"
+                "            df[__col] = __parsed\n"
+                "# Create year/month/day derivatives for all datetime columns\n"
+                "for __col in list(df.columns):\n"
+                "    try:\n"
+                "        if str(df[__col].dtype).startswith('datetime64'):\n"
+                "            __y = f'{__col}_year'\n"
+                "            __m = f'{__col}_month'\n"
+                "            __d = f'{__col}_day'\n"
+                "            if __y not in df.columns:\n"
+                "                df[__y] = df[__col].dt.year\n"
+                "            if __m not in df.columns:\n"
+                "                df[__m] = df[__col].dt.month\n"
+                "            if __d not in df.columns:\n"
+                "                df[__d] = df[__col].dt.day\n"
+                "    except Exception:\n"
+                "        pass\n"
+            )
             if data_context.get("df_excel_path"):
                 excel_kwargs = data_context.get("excel_read_kwargs") or {}
-                import json as _json
                 excel_kwargs_literal = _json.dumps(excel_kwargs)
                 return (
                     f"excel_path = {_q(data_context['df_excel_path'])}\n"
                     f"_excel_kwargs = {excel_kwargs_literal}\n"
                     "df = pd.read_excel(excel_path, **_excel_kwargs)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_tsv_path"):
                 tsv_kwargs = data_context.get("tsv_read_kwargs") or {}
-                import json as _json
                 tsv_kwargs_literal = _json.dumps(tsv_kwargs)
                 return (
                     f"tsv_path = {_q(data_context['df_tsv_path'])}\n"
                     f"_tsv_kwargs = {tsv_kwargs_literal}\n"
                     "df = pd.read_csv(tsv_path, sep='\t', **_tsv_kwargs)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_parquet_path"):
                 return (
                     f"parquet_path = {_q(data_context['df_parquet_path'])}\n"
                     "df = pd.read_parquet(parquet_path)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_feather_path"):
                 return (
                     f"feather_path = {_q(data_context['df_feather_path'])}\n"
                     "df = pd.read_feather(feather_path)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_pickle_path"):
                 return (
                     f"pickle_path = {_q(data_context['df_pickle_path'])}\n"
                     "df = pd.read_pickle(pickle_path)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_json_records_path"):
                 return (
                     f"json_path = {_q(data_context['df_json_records_path'])}\n"
                     "df = pd.read_json(json_path, lines=True)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_json_path"):
                 return (
                     f"json_path = {_q(data_context['df_json_path'])}\n"
                     "df = pd.read_json(json_path)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_csv_path"):
                 csv_kwargs = data_context.get("csv_read_kwargs") or {}
                 # Serialize kwargs to literal Python
-                import json as _json
                 kwargs_literal = _json.dumps(csv_kwargs)
                 return (
                     f"csv_path = {_q(data_context['df_csv_path'])}\n"
                     f"_csv_kwargs = {kwargs_literal}\n"
                     "df = pd.read_csv(csv_path, **_csv_kwargs)\n"
-                )
+                ) + _post_date_code
             if data_context.get("df_path"):
                 csv_kwargs = data_context.get("csv_read_kwargs") or {}
                 tsv_kwargs = data_context.get("tsv_read_kwargs") or {}
                 excel_kwargs = data_context.get("excel_read_kwargs") or {}
                 json_kwargs = data_context.get("json_read_kwargs") or {}
-                import json as _json
                 _csv_kwargs = _json.dumps(csv_kwargs)
                 _tsv_kwargs = _json.dumps(tsv_kwargs)
                 _excel_kwargs = _json.dumps(excel_kwargs)
@@ -264,7 +299,7 @@ class ChartExecutor:
                     "    df = pd.read_feather(_generic_path)\n"
                     "else:\n"
                     "    raise RuntimeError(f'Unsupported file extension for df_path: {_ext}')\n"
-                )
+                ) + _post_date_code
 
         return (
             "df = None\n"

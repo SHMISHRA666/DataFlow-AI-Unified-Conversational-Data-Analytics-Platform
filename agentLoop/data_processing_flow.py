@@ -536,6 +536,131 @@ class DataProcessingWorkflow:
             
             log_step(f"💾 Data processing results saved to: {output_file}")
             
+            # Additionally, persist a copy of the raw input data (CSV, XLSX, JSON) to the session folder
+            try:
+                original_files = processing_context.get("original_files", []) or []
+                if original_files:
+                    raw_path = Path(original_files[0])
+                    if raw_path.exists():
+                        import pandas as pd  # Local import to avoid global dependency at module import time
+                        # Load raw dataframe with basic format inference
+                        df_raw = None
+                        suffix = raw_path.suffix.lower()
+                        if suffix in ('.csv', '.tsv'):
+                            # Robust CSV/TSV reader with encoding detection and fallbacks
+                            def _read_table_with_fallback(path_obj, sep):
+                                # 1) Try default (utf-8 or system default)
+                                try:
+                                    return pd.read_csv(path_obj, sep=sep)
+                                except UnicodeDecodeError:
+                                    pass
+                                except Exception:
+                                    # Some other error; keep trying
+                                    pass
+                                # 2) Try detection libraries
+                                detected_enc = None
+                                try:
+                                    try:
+                                        from charset_normalizer import from_path as _cn_from_path
+                                        _best = _cn_from_path(str(path_obj)).best()
+                                        if _best is not None:
+                                            detected_enc = _best.encoding
+                                    except Exception:
+                                        detected_enc = None
+                                    if detected_enc is None:
+                                        try:
+                                            import chardet  # type: ignore
+                                            with open(path_obj, 'rb') as _bf:
+                                                detected_enc = chardet.detect(_bf.read(4096)).get('encoding')
+                                        except Exception:
+                                            detected_enc = None
+                                    if detected_enc:
+                                        try:
+                                            return pd.read_csv(path_obj, sep=sep, encoding=detected_enc)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                                # 3) Try common permissive encodings
+                                for enc in ['utf-8-sig', 'latin1', 'cp1252']:
+                                    try:
+                                        return pd.read_csv(path_obj, sep=sep, encoding=enc)
+                                    except Exception:
+                                        continue
+                                # 4) Last resort: decode with replacement then parse
+                                try:
+                                    import io
+                                    with open(path_obj, 'rb') as _fb:
+                                        _txt = _fb.read().decode('utf-8', errors='replace')
+                                    return pd.read_csv(io.StringIO(_txt), sep=sep)
+                                except Exception:
+                                    return None
+
+                            df_raw = _read_table_with_fallback(raw_path, sep=('\t' if suffix == '.tsv' else ','))
+                        elif suffix in ('.xlsx', '.xls'):
+                            df_raw = pd.read_excel(raw_path)
+                        elif suffix == '.json':
+                            # Try line-delimited first, then standard
+                            try:
+                                df_raw = pd.read_json(raw_path, lines=True)
+                            except Exception:
+                                df_raw = pd.read_json(raw_path)
+                        else:
+                            # Fallback: attempt CSV
+                            try:
+                                df_raw = pd.read_csv(raw_path)
+                            except Exception:
+                                df_raw = None
+                        
+                        if df_raw is not None and not df_raw.empty:
+                            # Best-effort date parsing without hardcoding column names
+                            try:
+                                parse_candidates = set()
+                                # Prefer columns with 'date'/'time' in name; also try object-typed columns
+                                for c in list(df_raw.columns):
+                                    name = str(c).lower()
+                                    if 'date' in name or 'time' in name:
+                                        parse_candidates.add(c)
+                                    elif str(getattr(df_raw[c], 'dtype', '')) == 'object':
+                                        parse_candidates.add(c)
+                                for c in list(parse_candidates):
+                                    try:
+                                        parsed = pd.to_datetime(df_raw[c], errors='coerce')
+                                        if getattr(parsed, 'notna', lambda: pd.Series([]))().mean() > 0.6:
+                                            df_raw[c] = parsed
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                pass
+                            
+                            # Write outputs in session directory for downstream reuse
+                            csv_out = session_dir / 'raw_data.csv'
+                            xlsx_out = session_dir / 'raw_data.xlsx'
+                            json_out = session_dir / 'raw_data.json'
+                            
+                            try:
+                                df_raw.to_csv(csv_out, index=False, encoding='utf-8')
+                                log_step(f"📁 Saved raw CSV to: {csv_out}")
+                            except Exception as _e:
+                                log_error(f"Failed to save raw CSV: {_e}")
+                            try:
+                                df_raw.to_excel(xlsx_out, index=False, engine='openpyxl')
+                                log_step(f"📁 Saved raw Excel to: {xlsx_out}")
+                            except Exception as _e:
+                                log_error(f"Failed to save raw Excel: {_e}")
+                            try:
+                                # JSON array of records, similar to assignee_inventor.json
+                                df_raw.to_json(json_out, orient='records', indent=2, force_ascii=False, date_format='iso')
+                                log_step(f"📁 Saved raw JSON to: {json_out}")
+                            except Exception as _e:
+                                log_error(f"Failed to save raw JSON: {_e}")
+                        else:
+                            log_error("Raw dataframe is empty or could not be loaded; skipping raw exports")
+                else:
+                    log_error("No original_files provided in processing_context; skipping raw exports")
+            except Exception as _raw_err:
+                log_error(f"Failed to export raw data copies: {_raw_err}")
+            
             # Also save a latest symlink for easy access
             latest_file = session_dir / "latest_data_processing.json"
             try:

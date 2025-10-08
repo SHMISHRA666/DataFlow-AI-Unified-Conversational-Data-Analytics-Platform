@@ -60,7 +60,7 @@ try:
     GEMINI_MODEL_NAME = _models_cfg["models"]["gemini"]["model"]
 except Exception:
     # Fallback to a reasonable default
-    GEMINI_MODEL_NAME = "gemini-2.5-pro"
+    GEMINI_MODEL_NAME = "gemini-2.5-flash"
 
 # Ensure folders
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
