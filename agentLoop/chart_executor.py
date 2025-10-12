@@ -40,6 +40,7 @@ class ChartExecutor:
         (self.output_directory / "svg").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "html").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "pdf").mkdir(parents=True, exist_ok=True)
+        (self.output_directory / "json").mkdir(parents=True, exist_ok=True)
     
     def _check_plotly_kaleido_compatibility(self) -> None:
         """Check if plotly and kaleido versions are compatible"""
@@ -340,6 +341,7 @@ output_dir = Path(r""" + f'"{self.output_directory}"' + """)
 png_path = output_dir / "png" / f"{chart_id}.png"
 svg_path = output_dir / "svg" / f"{chart_id}.svg"
 html_path = output_dir / "html" / f"{chart_id}.html"
+json_path = output_dir / "json" / f"{chart_id}.json"
 
 # DataFrame loading from pipeline-provided data_context
 """ + self.build_df_loader_preamble(data_context) + """
@@ -493,6 +495,10 @@ try:
                     fig.write_image(str(png_path), width=800, height=600)
                     fig.write_image(str(svg_path), format='svg', width=800, height=600)
                     fig.write_html(str(html_path))
+                    try:
+                        pio.write_json(fig, str(json_path))
+                    except Exception:
+                        pass
                     print(f"SUCCESS: Plotly chart exported to PNG, SVG, and HTML")
                 except Exception as e:
                     raise RuntimeError(f"Plotly image export failed: {{e}}")

@@ -1008,6 +1008,40 @@ def build_report(df: pd.DataFrame,
     charts = guide.get("charts", [])
     schema = infer_schema(df)
 
+    # Prefer embedding already-generated chart HTMLs (from the ChartExecutor) for exact fidelity
+    # with the contents in generated_charts/<session>/html/*.html. This ensures the combined
+    # index shows exactly the same charts and values without re-deriving data.
+    embedded_sections: List[Tuple[str, str]] = []
+    try:
+        out_dirpath = Path(os.path.dirname(out_html) or ".")
+        resolved_path = out_dirpath / "resolved_insights.json"
+        html_dir = out_dirpath / "html"
+        if resolved_path.exists() and html_dir.exists():
+            with open(resolved_path, "r", encoding="utf-8") as rf:
+                resolved_list = json.load(rf)
+            # Map chart title -> relative html path (html/<file>.html)
+            title_to_rel: Dict[str, str] = {}
+            for item in resolved_list:
+                t = item.get("title")
+                refs = item.get("references") or {}
+                hp = refs.get("html_path")
+                if t and isinstance(hp, str):
+                    rel = str(Path("html") / Path(hp).name).replace("\\", "/")
+                    title_to_rel[t] = rel
+            # Build sections in the same order as the guide
+            for raw in charts:
+                t = (raw.get("title") or raw.get("name"))
+                rel = title_to_rel.get(t)
+                if rel:
+                    height = int((raw.get("height") if isinstance(raw.get("height"), (int, float)) else 450) or 450)
+                    iframe = (
+                        f'<iframe src="{rel}" style="width:100%;height:{height}px;border:0" '
+                        f'loading="lazy" referrerpolicy="no-referrer"></iframe>'
+                    )
+                    embedded_sections.append((t or "Chart", iframe))
+    except Exception:
+        embedded_sections = []
+
     sections: List[Tuple[str, str]] = []
     built_figs: List[go.Figure] = []
     built_names: List[str] = []
@@ -1034,11 +1068,48 @@ def build_report(df: pd.DataFrame,
             include_js_next = False
             sections.append((name, fig_div))
 
+    # If we found pre-generated HTML charts, use them for the index to ensure exact match
+    if embedded_sections:
+        sections = embedded_sections
+
     published: List[Tuple[str, str]] = []
     if publish_py is not None and built_figs:
         if publish_combined:
             try:
-                # Build Chart Studio-safe figures directly from df/specs when possible
+                # Prefer using serialized figures if available to ensure parity with local HTML
+                # Look for generated_charts/<session>/json/*.json next to out_html
+                json_figs: List[go.Figure] = []
+                try:
+                    out_dirpath = Path(os.path.dirname(out_html) or ".")
+                    json_dir = out_dirpath / "json"
+                    if json_dir.exists():
+                        # Build mapping from chart titles to chart ids via resolved_insights.json
+                        title_to_id: Dict[str, str] = {}
+                        resolved_path = out_dirpath / "resolved_insights.json"
+                        if resolved_path.exists():
+                            with open(resolved_path, "r", encoding="utf-8") as rf:
+                                resolved_list = json.load(rf)
+                            for item in resolved_list:
+                                t = item.get("title")
+                                vid = item.get("visualization_id")
+                                if isinstance(t, str) and isinstance(vid, str):
+                                    title_to_id[t] = vid
+                        # Load figures in the same order as guide
+                        for raw in charts:
+                            t = raw.get("title") or raw.get("name")
+                            cid = title_to_id.get(t or "")
+                            if cid:
+                                fpath = json_dir / f"{cid}.json"
+                                if fpath.exists():
+                                    try:
+                                        jf = go.Figure(json.load(open(fpath, "r", encoding="utf-8")))
+                                        json_figs.append(jf)
+                                    except Exception:
+                                        pass
+                except Exception:
+                    json_figs = []
+
+                # Build Chart Studio-safe figures directly from df/specs when JSON not available
                 def _cs_fig_from_spec(spec: Dict[str, Any]) -> Optional[go.Figure]:
                     try:
                         stype = (spec.get('type') or '').lower()
@@ -1192,11 +1263,14 @@ def build_report(df: pd.DataFrame,
                             col_weight_est[c] = max(col_weight_est[c], w)
                         col_width_weights = col_weight_est
 
-                # Prefer rebuilding CS-safe figures per spec when possible
+                # Prefer JSON figures to guarantee exact values; fallback to rebuilt/sanitized
                 cs_figs: List[go.Figure] = []
-                for spec, f in zip(charts, built_figs):
-                    rebuilt = _cs_fig_from_spec(spec)
-                    cs_figs.append(rebuilt if rebuilt is not None else _sanitize_for_chart_studio(f))
+                if json_figs:
+                    cs_figs = json_figs
+                else:
+                    for spec, f in zip(charts, built_figs):
+                        rebuilt = _cs_fig_from_spec(spec)
+                        cs_figs.append(rebuilt if rebuilt is not None else _sanitize_for_chart_studio(f))
                 sanitized_figs = cs_figs
                 combo = combine_figures_to_subplots(
                     sanitized_figs, built_names,
@@ -1228,7 +1302,29 @@ def build_report(df: pd.DataFrame,
                     # Ensure filename doesn't exceed Chart Studio's 100-character limit
                     if len(fname) > 95:  # Leave some buffer
                         fname = fname[:95]
-                    url = publish_cs(publish_py, fig, filename=fname, sharing=publish_sharing, auto_open=False)
+                    # Try JSON parity first
+                    try:
+                        out_dirpath = Path(os.path.dirname(out_html) or ".")
+                        json_dir = out_dirpath / "json"
+                        resolved_path = out_dirpath / "resolved_insights.json"
+                        fig_to_publish = None
+                        if json_dir.exists() and resolved_path.exists():
+                            with open(resolved_path, "r", encoding="utf-8") as rf:
+                                resolved_list = json.load(rf)
+                            title_to_id = {item.get("title"): item.get("visualization_id") for item in resolved_list}
+                            cid = title_to_id.get(name)
+                            if isinstance(cid, str):
+                                fpath = json_dir / f"{cid}.json"
+                                if fpath.exists():
+                                    try:
+                                        fig_to_publish = go.Figure(json.load(open(fpath, "r", encoding="utf-8")))
+                                    except Exception:
+                                        fig_to_publish = None
+                        if fig_to_publish is None:
+                            fig_to_publish = fig
+                        url = publish_cs(publish_py, fig_to_publish, filename=fname, sharing=publish_sharing, auto_open=False)
+                    except Exception:
+                        url = publish_cs(publish_py, fig, filename=fname, sharing=publish_sharing, auto_open=False)
                     published.append((name, url))
                     print(f"📤 Published '{name}': {url}")
                 except Exception as e:
