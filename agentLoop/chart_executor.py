@@ -40,7 +40,6 @@ class ChartExecutor:
         (self.output_directory / "svg").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "html").mkdir(parents=True, exist_ok=True)
         (self.output_directory / "pdf").mkdir(parents=True, exist_ok=True)
-        (self.output_directory / "json").mkdir(parents=True, exist_ok=True)
     
     def _check_plotly_kaleido_compatibility(self) -> None:
         """Check if plotly and kaleido versions are compatible"""
@@ -341,7 +340,7 @@ output_dir = Path(r""" + f'"{self.output_directory}"' + """)
 png_path = output_dir / "png" / f"{chart_id}.png"
 svg_path = output_dir / "svg" / f"{chart_id}.svg"
 html_path = output_dir / "html" / f"{chart_id}.html"
-json_path = output_dir / "json" / f"{chart_id}.json"
+json_path = None  # disable top-level JSON export directory
 
 # DataFrame loading from pipeline-provided data_context
 """ + self.build_df_loader_preamble(data_context) + """
@@ -482,6 +481,30 @@ try:
         # Best-effort; keep original figure if anything fails
         pass
     
+    # Generic hover formatting: show values without hardcoded labels
+    try:
+        if 'fig' in locals():
+            try:
+                fig.update_yaxes(hoverformat=",.2f")
+            except Exception:
+                pass
+            try:
+                for __tr in (getattr(fig, 'data', []) or []):
+                    if getattr(__tr, 'hovertemplate', None) is None:
+                        __has_y = hasattr(__tr, 'y') and (getattr(__tr, 'y') is not None)
+                        __has_x = hasattr(__tr, 'x') and (getattr(__tr, 'x') is not None)
+                        __has_value = hasattr(__tr, 'value') and (getattr(__tr, 'value') is not None)
+                        if __has_y and __has_x:
+                            __tr.hovertemplate = "%{x}<br>%{y:,.2f}<extra></extra>"
+                        elif __has_y:
+                            __tr.hovertemplate = "%{y:,.2f}<extra></extra>"
+                        elif __has_value:
+                            __tr.hovertemplate = "%{label}: %{value:,.2f}<extra></extra>"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # Handle different visualization libraries
     if 'fig' in locals():
         # Plotly figure
@@ -495,10 +518,7 @@ try:
                     fig.write_image(str(png_path), width=800, height=600)
                     fig.write_image(str(svg_path), format='svg', width=800, height=600)
                     fig.write_html(str(html_path))
-                    try:
-                        pio.write_json(fig, str(json_path))
-                    except Exception:
-                        pass
+                    # Skip writing plotly JSON to avoid creating a top-level json directory
                     print(f"SUCCESS: Plotly chart exported to PNG, SVG, and HTML")
                 except Exception as e:
                     raise RuntimeError(f"Plotly image export failed: {{e}}")
