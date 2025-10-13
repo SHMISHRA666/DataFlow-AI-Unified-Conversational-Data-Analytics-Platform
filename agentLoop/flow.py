@@ -1104,6 +1104,15 @@ class AgentLoop4:
                 **({"answer": answer} if answer is not None else {})
             }
 
+            # Print final LLM answer to console for visibility
+            try:
+                if answer is not None:
+                    log_step("RAG Final Answer", answer, symbol="💬")
+                else:
+                    log_step("RAG Final Answer unavailable (LLM failed). Showing top-k context only.", symbol="ℹ️")
+            except Exception:
+                pass
+
             # Expose RAG answer at graph level for easy UI/console access
             try:
                 if answer is not None:
@@ -1128,6 +1137,11 @@ class AgentLoop4:
                 rag_answer_path.write_text(__json.dumps(to_write, ensure_ascii=False, indent=2), encoding='utf-8')
                 # Reference path in response for downstream consumers (UI)
                 rag_response["rag_answer_path"] = str(rag_answer_path)
+                # Mirror path at graph level for easy retrieval
+                try:
+                    context.plan_graph['graph']['rag_answer_path'] = str(rag_answer_path)
+                except Exception:
+                    pass
             except Exception as persist_err:
                 log_error(f"Failed to persist rag_answer.json: {persist_err}")
 
