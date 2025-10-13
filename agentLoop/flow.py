@@ -123,6 +123,38 @@ class AgentLoop4:
                     "user_query": conversation_plan.user_query
                 })
 
+        # Optionally add orchestration (monitoring) step to run after main processing
+        try:
+            has_rag = any(n.get("id") == "rag_processing" for n in nodes)
+            has_dp = any(n.get("id") == "data_processing" for n in nodes)
+            has_intel = any(n.get("id") == "intelligence" for n in nodes)
+
+            # Build reads for orchestration from whatever exists
+            orchestration_reads = []
+            if has_dp:
+                orchestration_reads.append("data_processing")
+            if has_intel:
+                orchestration_reads.append("intelligence")
+            if has_rag and not orchestration_reads:
+                orchestration_reads.append("rag_processing")
+
+            # Only add if there is at least one upstream step
+            if orchestration_reads:
+                nodes.append({
+                    "id": "orchestration",
+                    "description": "Run orchestration monitoring to persist system health and context",
+                    "agent": "OrchestrationLayer",
+                    "reads": orchestration_reads,
+                    "writes": ["orchestration_output"],
+                    "orchestration_type": "monitoring",
+                    "user_query": conversation_plan.user_query
+                })
+                for src in orchestration_reads:
+                    edges.append({"source": src, "target": "orchestration"})
+        except Exception:
+            # Orchestration step is optional; ignore any planning errors silently
+            pass
+
         plan_graph = {"nodes": nodes, "edges": edges}
 
         # Phase 3: Simple Output Chain Execution
@@ -161,6 +193,8 @@ class AgentLoop4:
             step_order.append("data_processing")
         if any(n.get("id") == "intelligence" for n in plan_graph.get("nodes", [])):
             step_order.append("intelligence")
+        if any(n.get("id") == "orchestration" for n in plan_graph.get("nodes", [])):
+            step_order.append("orchestration")
 
         for step_id in step_order:
             try:
@@ -1151,6 +1185,21 @@ class AgentLoop4:
         
         # Get original query from context
         original_query = context.plan_graph['graph'].get('original_query', 'Orchestration request')
+
+        # Ensure session_id and dag/file context propagate so persistence works
+        session_id = context.plan_graph['graph'].get('session_id')
+        file_manifest = context.plan_graph['graph'].get('file_manifest', [])
+        try:
+            # Attach session and dag context for persistence paths
+            for target_ctx in (organization_context, system_context, discovery_constraints):
+                if isinstance(target_ctx, dict):
+                    target_ctx.setdefault('session_id', session_id)
+                    target_ctx.setdefault('dag_context', {'session_id': session_id})
+                    # Provide manifest so discovery/monitoring can see files
+                    if 'file_manifest' not in target_ctx and file_manifest:
+                        target_ctx['file_manifest'] = file_manifest
+        except Exception:
+            pass
         
         # Run appropriate orchestration
         if orchestration_type == "discovery":
