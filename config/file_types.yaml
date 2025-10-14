@@ -22,3 +22,9 @@ qualitative_rag_extensions:
   - .md
   - .json
   - .csv
+  - .png
+  - .jpg
+  - .jpeg
+  - .svg
+  - .gif
+  - .webp

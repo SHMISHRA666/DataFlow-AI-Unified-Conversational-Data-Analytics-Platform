@@ -86,6 +86,7 @@ class AgentLoop4:
         else:
             # Quantitative processing - check for secondary classification
             if uploaded_files:
+                # Always run Data Processing first to generate CSV/XLSX/JSON artifacts
                 nodes.append({
                     "id": "data_processing",
                     "description": "Process uploaded files and prepare analysis-ready data",
@@ -94,34 +95,58 @@ class AgentLoop4:
                     "writes": ["intelligence_layer_ready_data"],
                     "user_query": conversation_plan.user_query
                 })
-                
-                # Configure intelligence layer based on secondary classification
-                intelligence_desc = "Generate recommendations, charts and narratives"
-                if conversation_plan.secondary_classification == "Report":
-                    intelligence_desc = "Generate comprehensive analysis report with charts and insights"
-                elif conversation_plan.secondary_classification == "Chart":
-                    intelligence_desc = "Generate data visualizations and charts"
-                
-                nodes.append({
-                    "id": "intelligence",
-                    "description": intelligence_desc,
-                    "agent": "IntelligenceLayer",
-                    "reads": ["data_processing"],
-                    "writes": ["intelligence_output"],
-                    "secondary_classification": conversation_plan.secondary_classification,
-                    "user_query": conversation_plan.user_query
-                })
-                edges.append({"source": "data_processing", "target": "intelligence"})
+
+                if (conversation_plan.secondary_classification or "None") == "None":
+                    # For direct data questions, skip full report/charts and use RAG to answer from processed data
+                    nodes.append({
+                        "id": "rag_processing",
+                        "description": "Use RAG over session artifacts (e.g., raw_data.json) to answer the data question",
+                        "agent": "RAGProcessing",
+                        "reads": ["data_processing"],
+                        "writes": ["qualitative_output"],
+                        "user_query": conversation_plan.user_query
+                    })
+                    edges.append({"source": "data_processing", "target": "rag_processing"})
+                else:
+                    # Configure intelligence layer based on secondary classification
+                    intelligence_desc = "Generate recommendations, charts and narratives"
+                    if conversation_plan.secondary_classification == "Report":
+                        intelligence_desc = "Generate comprehensive analysis report with charts and insights"
+                    elif conversation_plan.secondary_classification == "Chart":
+                        intelligence_desc = "Generate data visualizations and charts"
+
+                    nodes.append({
+                        "id": "intelligence",
+                        "description": intelligence_desc,
+                        "agent": "IntelligenceLayer",
+                        "reads": ["data_processing"],
+                        "writes": ["intelligence_output"],
+                        "secondary_classification": conversation_plan.secondary_classification,
+                        "user_query": conversation_plan.user_query
+                    })
+                    edges.append({"source": "data_processing", "target": "intelligence"})
             else:
-                nodes.append({
-                    "id": "intelligence",
-                    "description": "Analyze context and generate charts/narratives",
-                    "agent": "IntelligenceLayer",
-                    "reads": [],
-                    "writes": ["intelligence_output"],
-                    "secondary_classification": conversation_plan.secondary_classification,
-                    "user_query": conversation_plan.user_query
-                })
+                # No files present: fall back to intelligence if user asked for charts/report; else try RAG if qualitative
+                if (conversation_plan.secondary_classification or "None") in ("Report", "Chart"):
+                    nodes.append({
+                        "id": "intelligence",
+                        "description": "Analyze context and generate charts/narratives",
+                        "agent": "IntelligenceLayer",
+                        "reads": [],
+                        "writes": ["intelligence_output"],
+                        "secondary_classification": conversation_plan.secondary_classification,
+                        "user_query": conversation_plan.user_query
+                    })
+                else:
+                    # Quantitative direct question but no files; attempt RAG on any qualitative documents in manifest
+                    nodes.append({
+                        "id": "rag_processing",
+                        "description": "Attempt to answer using RAG over available documents",
+                        "agent": "RAGProcessing",
+                        "reads": [],
+                        "writes": ["qualitative_output"],
+                        "user_query": conversation_plan.user_query
+                    })
 
         # Optionally add orchestration (monitoring) step to run after main processing
         try:
@@ -186,12 +211,17 @@ class AgentLoop4:
             context.plan_graph['graph']['output_chain'][file_info['name']] = file_info['path']
 
         # Phase 4: Execute sequentially (no DAG scheduler)
+        # Respect DP -> RAG when both present; otherwise maintain sensible defaults
         step_order = []
-        if any(n.get("id") == "rag_processing" for n in plan_graph.get("nodes", [])):
-            step_order.append("rag_processing")
-        if any(n.get("id") == "data_processing" for n in plan_graph.get("nodes", [])):
+        has_dp = any(n.get("id") == "data_processing" for n in plan_graph.get("nodes", []))
+        has_rag = any(n.get("id") == "rag_processing" for n in plan_graph.get("nodes", []))
+        has_intel = any(n.get("id") == "intelligence" for n in plan_graph.get("nodes", []))
+
+        if has_dp:
             step_order.append("data_processing")
-        if any(n.get("id") == "intelligence" for n in plan_graph.get("nodes", [])):
+        if has_rag:
+            step_order.append("rag_processing")
+        if has_intel:
             step_order.append("intelligence")
         if any(n.get("id") == "orchestration" for n in plan_graph.get("nodes", [])):
             step_order.append("orchestration")
@@ -1029,24 +1059,37 @@ class AgentLoop4:
             user_query = conversation_plan.get('user_query', context.plan_graph['graph'].get('original_query', ''))
             session_id = context.plan_graph['graph'].get('session_id')
 
-            # Get file paths from manifest using configurable extensions
-            file_manifest = context.plan_graph['graph'].get('file_manifest', [])
-            file_cfg = context.plan_graph['graph'].get('file_type_config') or load_file_type_config()
-            allowed_exts = set(file_cfg.get('qualitative_rag_extensions', []))
+            # Prefer session outputs from Data Processing if available (CSV/XLSX/JSON)
             qualitative_files = []
-            for file_item in file_manifest:
-                file_path = file_item.get('path', '')
-                if not file_path:
-                    continue
-                file_ext = Path(file_path).suffix.lower()
-                if not allowed_exts or file_ext in allowed_exts:
-                    qualitative_files.append(file_path)
+            try:
+                sess_id = context.plan_graph['graph'].get('session_id')
+                if sess_id:
+                    sdir = Path('generated_charts') / str(sess_id)
+                    # Prefer CSV, then Excel, then JSON (avoid JSON parsing issues)
+                    for cand in [sdir / 'raw_data.csv', sdir / 'raw_data.xlsx', sdir / 'raw_data.json']:
+                        if cand.exists():
+                            qualitative_files.append(str(cand))
+            except Exception:
+                pass
+
+            # If none from session, fall back to manifest using configurable extensions
+            if not qualitative_files:
+                file_manifest = context.plan_graph['graph'].get('file_manifest', [])
+                file_cfg = context.plan_graph['graph'].get('file_type_config') or load_file_type_config()
+                allowed_exts = set(file_cfg.get('qualitative_rag_extensions', []))
+                for file_item in file_manifest:
+                    file_path = file_item.get('path', '')
+                    if not file_path:
+                        continue
+                    file_ext = Path(file_path).suffix.lower()
+                    if not allowed_exts or file_ext in allowed_exts:
+                        qualitative_files.append(file_path)
 
             if not qualitative_files:
                 log_error("No qualitative files found for RAG processing")
                 return {
                     "success": False,
-                    "error": "No qualitative files (PDF, HTML, TXT, MD, JSON) found in uploaded files"
+                    "error": "No qualitative files supported for RAG found in uploaded files"
                 }
 
             # Prepare per-session directories for RAG
@@ -1086,14 +1129,29 @@ class AgentLoop4:
             rag_ingest.process_documents(rebuild_index=True)
 
             # Run search and chat
-            results = rag_ingest.search(user_query)
-            context_chunks = [r.get("chunk", "") for r in results]
+            # Guard: ensure FAISS index was created before searching
             try:
-                answer = rag_ingest.chat_with_gemini(user_query, context_chunks)
+                if not (faiss_dir / 'index.bin').exists() or not (faiss_dir / 'metadata.json').exists():
+                    log_error("RAG ingestion did not create an index; skipping search")
+                    return {"success": False, "error": "RAG ingestion produced no embeddings/index from provided files"}
+            except Exception:
+                pass
+
+            # Use the new search_and_answer function which handles direct data queries
+            try:
+                answer = rag_ingest.search_and_answer(user_query, index_dir=faiss_dir, docs_dir=docs_dir)
+                results = rag_ingest.search(user_query, index_dir=faiss_dir)
             except Exception as e:
-                # If Gemini isn't available, still return search results
-                log_error(f"Gemini chat failed, returning search results only: {e}")
-                answer = None
+                # If search/answer fails, try basic search
+                log_error(f"RAG search_and_answer failed, trying basic search: {e}")
+                try:
+                    results = rag_ingest.search(user_query, index_dir=faiss_dir)
+                    context_chunks = [r.get("chunk", "") for r in results]
+                    answer = rag_ingest.chat_with_gemini(user_query, context_chunks)
+                except Exception as e2:
+                    log_error(f"Basic search also failed: {e2}")
+                    answer = None
+                    results = []
 
             # Compose response
             rag_response = {

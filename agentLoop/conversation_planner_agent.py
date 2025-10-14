@@ -154,11 +154,12 @@ class ConversationPlannerAgent:
             # Build context for analysis
             context_data = self._build_context(user_query, files or [], file_profiles)
             
-            # Format the full prompt
-            full_prompt = system_prompt.format(
-                user_query=user_query,
-                files=json.dumps(files or [], indent=2),
-                file_profiles=json.dumps(file_profiles or {}, indent=2)
+            # Format the full prompt safely without interpreting other braces in examples
+            full_prompt = (
+                system_prompt
+                .replace("{user_query}", user_query)
+                .replace("{files}", json.dumps(files or [], indent=2))
+                .replace("{file_profiles}", json.dumps(file_profiles or {}, indent=2))
             )
             
             # Get model response
@@ -190,19 +191,22 @@ class ConversationPlannerAgent:
         except Exception as e:
             log_error(f"ConversationPlannerAgent failed: {e}")
             
-            # Fallback classification based on file types
-            file_analysis = self._analyze_file_types(files or [])
-            
-            # Use fixed file type rules for fallback
-            if file_analysis["has_fixed_quantitative"] and not file_analysis["has_fixed_qualitative"]:
-                fallback_classification = "quantitative"
-            elif file_analysis["has_fixed_qualitative"] and not file_analysis["has_fixed_quantitative"]:
+            # Fallback classification should be INTENT-BASED, avoid file-type hardcoding
+            uq = (user_query or "").strip().lower()
+            # Simple intent heuristics when LLM fails
+            qualitative_signals = [
+                "summarize", "explain", "what does", "describe", "key points",
+                "overview", "gist", "interpret"
+            ]
+            quantitative_signals = [
+                "how many", "count", "average", "mean", "sum", "total", "trend",
+                "top ", "bottom ", "compare", "distribution", "variance", "median",
+                "chart", "graph", "plot", "visualize"
+            ]
+            if any(s in uq for s in qualitative_signals) and not any(s in uq for s in quantitative_signals):
                 fallback_classification = "qualitative"
-            elif file_analysis["has_flexible_json"] and not file_analysis["has_fixed_quantitative"] and not file_analysis["has_fixed_qualitative"]:
-                # Only JSON files - default to quantitative for structured data assumption
-                fallback_classification = "quantitative"
             else:
-                # Mixed files or unknown - default to quantitative for data processing
+                # Default towards quantitative simple answer when uncertain
                 fallback_classification = "quantitative"
             
             return ConversationPlan(
