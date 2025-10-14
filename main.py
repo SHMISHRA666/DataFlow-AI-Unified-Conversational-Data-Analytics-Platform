@@ -377,6 +377,100 @@ def get_user_query():
     log_step("📝 Your Question:", symbol="")
     return input().strip()
 
+def extract_final_answer_from_context(execution_context) -> dict:
+    """Extract final answer and metadata from execution context for UI consumption.
+    
+    This function is generic and works for all query types (quantitative, qualitative, etc.)
+    without hardcoding specific field names or paths.
+    
+    Usage in web_app.py or other backends:
+        # After running agent_loop.run()
+        execution_context = await agent_loop.run(query, file_manifest, uploaded_files)
+        ui_payload = extract_final_answer_from_context(execution_context)
+        
+        # Return to frontend
+        return jsonify(ui_payload)
+    
+    Returns:
+        dict: Structured payload with:
+            - success (bool): Whether extraction succeeded
+            - session_id (str): Unique session identifier
+            - output_directory (str): Path to session output folder
+            - final_answer_text (str): The main answer text (from RAG or other sources)
+            - rag_answer_path (str): Path to rag_answer.json file if available
+            - artifacts (dict): Discovered files organized by type (html, png, svg, pdf, yaml, json)
+            - classification (dict): Query classification info if available
+    """
+    try:
+        # Extract session_id from context
+        session_id = None
+        output_directory = None
+        final_answer_text = None
+        rag_answer_path = None
+        
+        # Try to get session_id from plan_graph
+        try:
+            session_id = execution_context.plan_graph.get('graph', {}).get('session_id')
+        except Exception:
+            pass
+        
+        # Try to get RAG answer if available
+        try:
+            final_answer_text = execution_context.plan_graph.get('graph', {}).get('rag_answer')
+            rag_answer_path = execution_context.plan_graph.get('graph', {}).get('rag_answer_path')
+        except Exception:
+            pass
+        
+        # If no RAG answer, try to extract from step outputs
+        if not final_answer_text:
+            try:
+                # Check if there's a rag_processing step output
+                rag_output = execution_context.get_output('rag_processing')
+                if rag_output and isinstance(rag_output, dict):
+                    final_answer_text = rag_output.get('answer')
+            except Exception:
+                pass
+        
+        # Build the output directory path if we have session_id
+        if session_id:
+            output_directory = str(Path('generated_charts') / str(session_id))
+        
+        # Use the existing helper functions to discover artifacts
+        artifacts = None
+        if session_id:
+            artifacts = discover_session_artifacts(session_id)
+        
+        # Build the final payload
+        payload = {
+            "session_id": session_id,
+            "output_directory": output_directory,
+            "final_answer_text": final_answer_text,
+            "rag_answer_path": rag_answer_path,
+            "artifacts": artifacts,
+            "success": True
+        }
+        
+        # Add any additional metadata from the context
+        try:
+            # Extract classification info if available
+            classification = execution_context.plan_graph.get('graph', {}).get('classification')
+            if classification:
+                payload["classification"] = classification
+        except Exception:
+            pass
+        
+        return payload
+        
+    except Exception as e:
+        log_error(f"Failed to extract final answer from context: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "final_answer_text": None,
+            "session_id": None
+        }
+
+
 async def main():
     load_dotenv()
     print(BANNER)
@@ -400,6 +494,13 @@ async def main():
             # Process with AgentLoop4 - returns ExecutionContextManager object
             log_step("🔄 Processing with AgentLoop4...")
             execution_context = await agent_loop.run(query, file_manifest, uploaded_files)
+            
+            # Extract final answer and metadata for UI consumption
+            ui_payload = extract_final_answer_from_context(execution_context)
+            
+            # Store the payload for potential UI/API access
+            # This can be returned by web_app.py endpoints without modification
+            execution_context.ui_payload = ui_payload
             
             # Minimal completion message
             print("\n" + "="*60)
