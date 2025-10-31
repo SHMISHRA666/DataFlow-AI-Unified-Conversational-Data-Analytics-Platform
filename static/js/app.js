@@ -355,6 +355,37 @@ function askQuestion() {
         `;
         
         addMessageToChat('assistant', responseHtml);
+
+        const finalAnswer = data.final_answer_text || '';
+        const artifacts = data.artifacts || {};
+        let artifactUrl = '';
+        if (artifacts.preferred_entry && (artifacts.preferred_entry.public_url || artifacts.preferred_entry.relative)) {
+            artifactUrl = artifacts.preferred_entry.public_url || (`/${artifacts.preferred_entry.relative}`);
+        } else if (artifacts.files && artifacts.files.html && artifacts.files.html.length > 0) {
+            const first = artifacts.files.html[0];
+            artifactUrl = first.public_url || (`/${first.relative}`);
+        }
+
+        let resultsHtml = '';
+        if (finalAnswer) {
+            resultsHtml += `
+                <div class="json-response">
+                    <div class="json-title">Answer</div>
+                    <div class="json-output">${escapeHtml(finalAnswer)}</div>
+                </div>
+            `;
+        }
+        if (artifactUrl) {
+            resultsHtml += `
+                <div class="json-response">
+                    <div class="json-title">Report</div>
+                    <a href="${artifactUrl}" target="_blank" rel="noopener" class="btn-primary">Open Generated Report</a>
+                </div>
+            `;
+        }
+        if (resultsHtml) {
+            addMessageToChat('assistant', resultsHtml);
+        }
         
     })
     .catch(err => {
