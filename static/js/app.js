@@ -6,6 +6,12 @@ let fileInfo = null;
 let conversationActive = false;
 let conversationHistory = []; // Stores the full conversation
 
+// Dedicated handler to open file dialog from upload area
+function onUploadAreaClick() {
+    const input = document.getElementById('file-input');
+    if (input) input.click();
+}
+
 // Initialize the application
 DocumentReady = false;
 document.addEventListener('DOMContentLoaded', function() {
@@ -55,10 +61,7 @@ function renderUploadArea() {
     setupFileUpload();
 
     // Rebind click to trigger the hidden file input
-    uploadArea.addEventListener('click', function() {
-        const input = document.getElementById('file-input');
-        if (input) input.click();
-    });
+    // Moved to setupDragAndDrop to avoid duplicate bindings
 }
 
 function togglePreChat(show) {
@@ -162,6 +165,8 @@ function updateDatasetUI(value) {
 function setupFileUpload() {
     const fileInput = document.getElementById('file-input');
     if (!fileInput) return;
+    // Avoid duplicate listeners on re-render
+    fileInput.removeEventListener('change', handleFileSelect);
     fileInput.addEventListener('change', handleFileSelect);
 }
 
@@ -189,10 +194,9 @@ function setupDragAndDrop() {
         }
     });
     
-    uploadArea.addEventListener('click', function() {
-        const input = document.getElementById('file-input');
-        if (input) input.click();
-    });
+    // Ensure only a single click listener exists
+    uploadArea.removeEventListener('click', onUploadAreaClick);
+    uploadArea.addEventListener('click', onUploadAreaClick);
 }
 
 function handleFileSelect(event) {
@@ -339,22 +343,37 @@ function askQuestion() {
         // Hide pre-chat (welcome + dropdown + upload)
         togglePreChat(false);
         
-        // Compose EXACT JSON shape from ConversationPlannerAgent
-        const out = data.classification || {};
-        const jsonPayload = {
-            user_query: out.user_query || data.user_query || question,
-            primary_classification: out.primary_classification || 'unknown',
-            secondary_classification: out.secondary_classification || 'None'
-        };
         
-        const responseHtml = `
-            <div class="json-response">
-                <div class="json-title">Classification</div>
-                <pre class="json-output">${escapeHtml(JSON.stringify(jsonPayload, null, 2))}</pre>
-            </div>
-        `;
-        
-        addMessageToChat('assistant', responseHtml);
+        const finalAnswer = data.final_answer_text || '';
+        const artifacts = data.artifacts || {};
+        let artifactUrl = '';
+        if (artifacts.preferred_entry && (artifacts.preferred_entry.public_url || artifacts.preferred_entry.relative)) {
+            artifactUrl = artifacts.preferred_entry.public_url || (`/${artifacts.preferred_entry.relative}`);
+        } else if (artifacts.files && artifacts.files.html && artifacts.files.html.length > 0) {
+            const first = artifacts.files.html[0];
+            artifactUrl = first.public_url || (`/${first.relative}`);
+        }
+
+        let resultsHtml = '';
+        if (finalAnswer) {
+            resultsHtml += `
+                <div class="json-response">
+                    <div class="json-title">Answer</div>
+                    <div class="json-output">${escapeHtml(finalAnswer)}</div>
+                </div>
+            `;
+        }
+        if (artifactUrl) {
+            resultsHtml += `
+                <div class="json-response">
+                    <div class="json-title">Report</div>
+                    <a href="${artifactUrl}" target="_blank" rel="noopener" class="btn-primary">Open Generated Report</a>
+                </div>
+            `;
+        }
+        if (resultsHtml) {
+            addMessageToChat('assistant', resultsHtml);
+        }
         
     })
     .catch(err => {

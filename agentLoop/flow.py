@@ -8,6 +8,8 @@ from agentLoop.data_processing_flow import DataProcessingWorkflow
 from utils.utils import load_file_type_config
 from agentLoop.conversation_planner_agent import ConversationPlannerAgent
 import pandas as pd
+import re
+import requests
 from dotenv import load_dotenv
 from pathlib import Path
 from action.executor import run_user_code
@@ -45,6 +47,14 @@ class AgentLoop4:
         self.orchestration_workflow = OrchestrationWorkflow(multi_mcp)
         self.data_processing_workflow = DataProcessingWorkflow(multi_mcp)
         self.conversation_planner = ConversationPlannerAgent()
+
+    def _embeddings_available(self) -> bool:
+        try:
+            # quick ping to local embeddings service (Ollama-like). Keep timeout tiny.
+            requests.get("http://localhost:11434/", timeout=0.4)
+            return True
+        except Exception:
+            return False
 
     async def run(self, query, file_manifest, uploaded_files):
         # Step 1: Use conversation planner to classify the query
@@ -97,16 +107,31 @@ class AgentLoop4:
                 })
 
                 if (conversation_plan.secondary_classification or "None") == "None":
-                    # For direct data questions, skip full report/charts and use RAG to answer from processed data
-                    nodes.append({
-                        "id": "rag_processing",
-                        "description": "Use RAG over session artifacts (e.g., raw_data.json) to answer the data question",
-                        "agent": "RAGProcessing",
-                        "reads": ["data_processing"],
-                        "writes": ["qualitative_output"],
-                        "user_query": conversation_plan.user_query
-                    })
-                    edges.append({"source": "data_processing", "target": "rag_processing"})
+                    # Decision: if user asks for charts OR embeddings service is not available,
+                    # prefer Intelligence layer over RAG for quantitative queries.
+                    wants_charts = any(k in (conversation_plan.user_query or "").lower() for k in ["chart", "plot", "visual"])
+                    if wants_charts or not self._embeddings_available():
+                        nodes.append({
+                            "id": "intelligence",
+                            "description": "Generate default charts and insights for quantitative query",
+                            "agent": "IntelligenceLayer",
+                            "reads": ["data_processing"],
+                            "writes": ["intelligence_output"],
+                            "secondary_classification": "Chart",
+                            "user_query": conversation_plan.user_query
+                        })
+                        edges.append({"source": "data_processing", "target": "intelligence"})
+                    else:
+                        # Use RAG over processed artifacts
+                        nodes.append({
+                            "id": "rag_processing",
+                            "description": "Use RAG over session artifacts (e.g., raw_data.json) to answer the data question",
+                            "agent": "RAGProcessing",
+                            "reads": ["data_processing"],
+                            "writes": ["qualitative_output"],
+                            "user_query": conversation_plan.user_query
+                        })
+                        edges.append({"source": "data_processing", "target": "rag_processing"})
                 else:
                     # Configure intelligence layer based on secondary classification
                     intelligence_desc = "Generate recommendations, charts and narratives"
@@ -247,6 +272,71 @@ class AgentLoop4:
                     context.mark_failed(step_id, result.get("error"))
             except Exception as e:
                 context.mark_failed(step_id, str(e))
+
+        # Fallback: If RAG didn't produce an answer and this looks like a simple aggregation request,
+        # compute directly from the processed dataset (best-effort) so the UI can show an answer.
+        try:
+            graph = context.plan_graph.get('graph', {})
+            existing_answer = graph.get('rag_answer')
+            if not existing_answer:
+                qtext = (query or '').lower()
+                wants_sum = ('sum of' in qtext) or ('total of' in qtext) or qtext.startswith('sum ')
+                if wants_sum:
+                    # Extract column name heuristically
+                    col = None
+                    m = re.search(r"sum\s+of\s+[\"']?([\w\s]+?)[\"']?(?:\s+column)?(?:\s|$)", query, re.I)
+                    if m:
+                        col = m.group(1).strip()
+                    if not col:
+                        m2 = re.search(r"sum\s+([\w]+)", query, re.I)
+                        if m2:
+                            col = m2.group(1).strip()
+
+                    # Find a usable data path from data processing output
+                    dp_out = context.get_output('data_processing')
+                    data_ctx = {}
+                    if isinstance(dp_out, dict):
+                        if isinstance(dp_out.get('intelligence_layer_ready_data'), dict):
+                            data_ctx = dp_out['intelligence_layer_ready_data'].get('data_context', {}) or {}
+                        if not data_ctx:
+                            data_ctx = dp_out.get('data_context', {}) or {}
+
+                    csv_path = None
+                    if isinstance(data_ctx, dict):
+                        csv_path = data_ctx.get('df_csv_path') or data_ctx.get('csv_path')
+
+                    # Load data
+                    df = None
+                    if csv_path:
+                        try:
+                            df = pd.read_csv(csv_path)
+                        except Exception:
+                            try:
+                                df = pd.read_excel(csv_path)
+                            except Exception:
+                                df = None
+
+                    if df is not None and col:
+                        # Match column name case-insensitively; strip trailing word 'column'
+                        candidates = [c for c in df.columns if c.lower() == col.lower()]
+                        if not candidates and 'column' in col.lower():
+                            base = col.lower().replace('column', '').strip()
+                            candidates = [c for c in df.columns if c.lower() == base]
+                        if not candidates and col.lower() not in [c.lower() for c in df.columns]:
+                            # Try to find a close match by removing quotes/spaces
+                            norm = col.replace('"', '').replace("'", '').strip().lower()
+                            candidates = [c for c in df.columns if c.strip().lower() == norm]
+
+                        if candidates:
+                            col_actual = candidates[0]
+                            try:
+                                s = pd.to_numeric(df[col_actual], errors='coerce').sum()
+                                context.plan_graph['graph']['rag_answer'] = f"Sum of {col_actual} is {s}"
+                            except Exception:
+                                pass
+        except Exception:
+            # Non-fatal; continue returning context
+            pass
 
         return context
 
