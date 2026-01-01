@@ -1,0 +1,49 @@
+agents:
+  # Intelligence Layer Agents for DataFlow AI
+  RecommendationAgent:
+    prompt_file: "prompts/recommendation_prompt.txt"
+    model: "gemini"
+
+  GenerationAgent:
+    prompt_file: "prompts/generation_prompt.txt"
+    model: "gemini"
+
+  NarrativeAgent:
+    prompt_file: "prompts/narrative_prompt.txt"
+    model: "gemini"
+
+  # Orchestration Layer Agents for DataFlow AI (kept)
+  DiscoveryAgent:
+    prompt_file: "prompts/discovery_prompt.txt"
+    model: "gemini"
+
+  MonitoringAgent:
+    prompt_file: "prompts/monitoring_prompt.txt"
+    model: "gemini"
+
+  # Chart Execution Agent for DataFlow AI
+  ChartExecutorAgent:
+    prompt_file: "prompts/chart_executor_prompt.txt"
+    model: "gemini"
+
+  # Data Processing Layer Agents for DataFlow AI
+  DataIngestionAgent:
+    prompt_file: "prompts/data_ingestion_prompt.txt"
+    model: "gemini"
+
+  DataCleaningAgent:
+    prompt_file: "prompts/data_cleaning_prompt.txt"
+    model: "gemini"
+
+  DataTransformationAgent:
+    prompt_file: "prompts/data_transformation_prompt.txt"
+    model: "gemini"
+
+  DataAnalysisAgent:
+    prompt_file: "prompts/data_analysis_prompt.txt"
+    model: "gemini"
+
+  # Conversation Planner Agent for top-of-funnel classification
+  ConversationPlannerAgent:
+    prompt_file: "prompts/conversation_planner_agent.txt"
+    model: "gemini"

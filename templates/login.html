@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+  <style>
+    .auth-card { max-width: 480px; margin: 60px auto; }
+    .auth-form { display: flex; flex-direction: column; gap: 12px; }
+    .auth-form input { padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; }
+    .auth-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+    .error { color: #dc3545; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header"><h1 class="logo"><i class="fas fa-lock"></i> Sign In</h1></header>
+    <main class="main-content">
+      <div class="card auth-card">
+        <div class="card-header">
+          <h2>Welcome back</h2>
+          <p>Please sign in to continue</p>
+        </div>
+        <div class="card-body">
+          {% if error %}
+          <div class="error"><i class="fas fa-exclamation-circle"></i> {{ error }}</div>
+          {% endif %}
+          <form class="auth-form" method="post" action="{{ url_for('login') }}">
+            <input type="hidden" name="next" value="{{ next or '/' }}">
+            <div>
+              <label>Username</label>
+              <input type="text" name="username" placeholder="Enter username" required>
+            </div>
+            <div>
+              <label>Password</label>
+              <input type="password" name="password" placeholder="Enter password" required>
+            </div>
+            <div class="auth-actions">
+              <a href="{{ url_for('register') }}">Create account</a>
+              <button type="submit" class="btn btn-primary"><i class="fas fa-sign-in-alt"></i> Login</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

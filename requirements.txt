@@ -1,0 +1,134 @@
+# DataFlow AI - Unified Conversational Data Analytics Platform
+# Core dependencies for running the complete DataFlow AI system
+
+# Core Framework and CLI
+mcp[cli]>=1.7.0
+mcp[cli]>=1.6.0
+
+# Configuration and Data Processing
+pyyaml
+rapidfuzz>=3.13.0
+requests>=2.32.3
+asyncio>=3.4.3
+bs4>=0.0.2
+python-dotenv>=1.1.0
+
+# Vector Search and Embeddings
+faiss-cpu>=1.10.0
+llama-index>=0.12.31
+llama-index-embeddings-google-genai>=0.1.0
+
+# Document Processing and Web Scraping
+markitdown[all]>=0.1.1
+trafilatura[all]>=2.0.0
+pymupdf4llm>=0.0.21
+pymupdf>=1.25.5
+readability-lxml>=0.8.4.1
+markdownify>=1.1.0
+
+# Web Automation and Screenshots
+playwright>=1.52.0
+patchright>=1.52.5
+
+# Image Processing and OCR
+pillow>=11.2.1
+
+# Data Analysis and Visualization
+pandas>=2.2.3
+numpy>=2.2.5
+matplotlib>=3.10.3
+seaborn>=0.13.2
+plotly==6.3.0
+kaleido==1.0.0
+chart-studio==1.0.0
+
+# Google AI and API Integration
+google-generativeai>=0.8.5
+google-ai-generativelanguage>=0.6.15
+google-api-core>=2.25.1
+google-api-python-client>=2.181.0
+google-auth>=2.39.0
+google-auth-httplib2>=0.2.0
+googleapis-common-protos>=1.70.0
+
+# Web Framework and API
+fastapi>=0.115.12
+uvicorn>=0.34.2
+flask>=3.1.1
+sse-starlette>=2.3.4
+
+# Data Validation and Processing
+pydantic>=2.11.3
+pydantic-core>=2.33.2
+json-repair>=0.44.1
+
+# Natural Language Processing
+spacy>=3.8.4
+
+# Network and HTTP
+httpx>=0.28.1
+httplib2>=0.30.0
+urllib3>=2.4.0
+
+# Template Engine
+jinja2>=3.1.6
+
+# Graph Processing
+networkx>=3.4.2
+
+# System Monitoring and Utilities
+psutil>=7.0.0
+rich>=14.0.0
+tqdm>=4.67.1
+colorama>=0.4.6
+
+# Analytics and Tracking
+posthog>=5.4.0
+
+# Code Analysis
+astor>=0.8.1
+
+# CSS Processing
+cssutils>=2.11.1
+
+# Data Processing Utilities
+python-dateutil==2.9.0.post0
+pytz>=2025.2
+tzdata>=2025.2
+
+# Security and Authentication
+certifi>=2025.4.26
+charset-normalizer>=3.4.2
+idna>=3.10
+rsa>=4.9.1
+pyasn1>=0.6.1
+pyasn1-modules>=0.4.2
+
+# Protocol Buffers and gRPC
+grpcio>=1.74.0
+grpcio-status>=1.71.2
+protobuf>=5.29.5
+proto-plus>=1.26.1
+
+# Data Processing and Utilities
+narwhals>=2.1.1
+packaging>=25.0
+pyparsing>=3.2.3
+six>=1.17.0
+tenacity>=9.1.2
+retrying>=1.4.2
+
+# Type System
+typing-extensions>=4.13.2
+typing-inspection>=0.4.0
+annotated-types>=0.7.0
+
+# Caching and Performance
+cachetools>=5.5.2
+
+# URI and Template Processing
+uritemplate>=4.2.0
+
+# Additional Utilities
+beautifulsoup4  # For HTML parsing in RAG ingest
+pytesseract    # For OCR functionality in RAG ingest

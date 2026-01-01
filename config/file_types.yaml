@@ -1,0 +1,30 @@
+fixed_quantitative:
+  - .csv
+  - .xlsx
+  - .xls
+
+fixed_qualitative:
+  - .pdf
+  - .html
+  - .htm
+  - .txt
+  - .md
+
+flexible_types:
+  - .json
+
+# Extensions considered for RAG qualitative processing
+qualitative_rag_extensions:
+  - .pdf
+  - .html
+  - .htm
+  - .txt
+  - .md
+  - .json
+  - .csv
+  - .png
+  - .jpg
+  - .jpeg
+  - .svg
+  - .gif
+  - .webp
