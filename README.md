@@ -514,8 +514,6 @@ The platform provides a structured JSON payload for UI consumption:
 - Classification metadata for query routing
 - Preferred entry point (plotly_index.html) for dashboards
 
-See `UI_PAYLOAD_EXTRACTION_GUIDE.md` for detailed integration documentation.
-
 ## 📁 Output Structure
 
 DataFlow AI creates organized, session-based outputs:
@@ -829,11 +827,6 @@ Dataflow_AI/
 ├── utils/                         # Utility functions
 │   ├── utils.py                   # Logging and helpers
 │   └── json_parser.py            # JSON parsing utilities
-├── examples_NR/                   # Test scripts and demos
-│   ├── test_complete_dataflow_pipeline.py
-│   ├── test_conversation_planner.py
-│   ├── intelligence_combined_demo.py
-│   └── orchestration_layer_demo.py
 ├── generated_charts/              # Output directory (session-based)
 ├── uploads/                       # User file uploads
 ├── results/                       # Session manifests
@@ -841,7 +834,6 @@ Dataflow_AI/
 ├── web_app.py                    # Frontend web server (port 5000)
 ├── requirements.txt              # pip dependencies
 ├── pyproject.toml                # UV package configuration
-├── UI_PAYLOAD_EXTRACTION_GUIDE.md # UI integration guide
 └── README.md                     # This file
 ```
 
@@ -941,7 +933,6 @@ When extending DataFlow AI:
 ## 📄 Documentation
 
 - **Main README**: This file
-- **UI Integration Guide**: See `UI_PAYLOAD_EXTRACTION_GUIDE.md` for detailed payload structure
 - **Architecture Diagrams**: 
   - `DataFlow_Drawn_Architecture.jpeg` - Visual architecture overview
   - `DataFlowAI_Architecture.drawio` - Editable Draw.io diagram
