@@ -21,7 +21,57 @@ DataFlow AI is a comprehensive, agentic conversational data analytics platform t
 
 ## 🏗️ Architecture
 
-DataFlow AI follows a layered architecture with specialized agents working in concert:
+DataFlow AI follows a **two-server, layered architecture** with specialized agents working in concert:
+
+### System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend Server (Port 5000)               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Web UI     │  │  Auth System │  │ File Upload  │     │
+│  │  (Flask)     │  │              │  │              │     │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
+│         │                 │                 │              │
+│         └─────────────────┴─────────────────┘              │
+│                            │                                │
+│                            ▼                                │
+│                   HTTP API Request                          │
+└────────────────────────────┼────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Backend API Server (Port 5001)                │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │         Conversation Planner Agent                     │ │
+│  │              (Query Classification)                   │ │
+│  └───────────────┬──────────────────────────────────────┘ │
+│                  │                                         │
+│         ┌────────┴────────┐                              │
+│         ▼                 ▼                               │
+│  Qualitative         Quantitative                         │
+│         │                 │                               │
+│         ▼                 ▼                               │
+│  RAG Processing    Data Processing Layer                  │
+│                           │                               │
+│                           ▼                               │
+│                  Intelligence Layer                        │
+│                           │                               │
+│                           ▼                               │
+│                  Chart Execution                          │
+│                           │                               │
+│                           ▼                               │
+│                  Export & Reporting                       │
+│                           │                               │
+│                           ▼                               │
+│              Structured JSON Response                      │
+└───────────────────────────┼───────────────────────────────┘
+                            │
+                            ▼
+                    Frontend displays results
+```
+
+### Agent Workflow
 
 ```
 User Query → Conversation Planner → Route to Pipeline
@@ -45,7 +95,7 @@ User Query → Conversation Planner → Route to Pipeline
 - **Purpose**: Intelligent query classification and routing
 - **Capabilities**:
   - Automatic detection of qualitative vs quantitative queries
-  - File type-based routing (CSV/Excel → quantitative, PDF/HTML → qualitative)
+  - Query type-based routing to quantitative and qualitative analysis
   - Secondary classification for quantitative queries (Report/Chart/None)
   - Context propagation to downstream agents
 
@@ -93,16 +143,18 @@ Professional report generation and distribution:
 - **Plotly Reports**: Interactive HTML dashboards with Chart Studio integration
 - **Multi-Format Export**: PNG, SVG, HTML, PDF outputs
 - **Report Agent**: Automated report generation with customization
-- **URL Generation**: Shareable links for Plotly Chart Studio
 
 #### 8. **Web Interface** 🌐
 Full-featured Flask application for browser-based access:
 
-- **User Authentication**: Secure login and registration system
-- **File Upload**: Multi-file upload with format validation
-- **Real-Time Processing**: Asynchronous query processing with progress tracking
+- **Two-Server Architecture**: Separated frontend (port 5000) and backend (port 5001) for scalability
+- **User Authentication**: Secure login and registration system with password hashing
+- **File Upload**: Multi-file upload with format validation and session management
+- **Real-Time Processing**: Asynchronous query processing via backend API
 - **Results Visualization**: Embedded charts and downloadable artifacts
 - **Session Management**: User-specific session tracking and history
+- **CORS Support**: Cross-origin resource sharing enabled for API access
+- **Artifact Serving**: Direct file serving from generated_charts directory
 
 ## 🚀 Quick Start
 
@@ -129,10 +181,22 @@ pip install uv
 
 # Sync dependencies from pyproject.toml
 uv sync
+
+# Activate the virtual environment
+# On Windows: .venv\Scripts\activate
+# On Unix/Mac: source .venv/bin/activate
 ```
 
 **Option B: Using pip**
 ```bash
+# Create virtual environment (recommended)
+python -m venv .venv
+
+# Activate virtual environment
+# On Windows: .venv\Scripts\activate
+# On Unix/Mac: source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -144,19 +208,41 @@ cp .env.example .env
 
 Required environment variables:
 ```env
+# Required: Google Gemini API Key
 GOOGLE_API_KEY=your_gemini_api_key
-EMBED_API_URL=http://localhost:11434/api/embeddings  # Optional: for local embeddings
+
+# Optional: Flask secret key for session management
+FLASK_SECRET_KEY=your-secret-key-here
+
+# Optional: Custom output directory
+OUTPUTS_DIR=./generated_charts
+
+# Optional: RAG Ingest Configuration
+EMBED_API_URL=http://localhost:11434/api/embeddings  # For local embeddings
 DOCS_DIR=./documents  # For RAG ingest
 FAISS_DIR=./faiss_index  # For RAG storage
-PLOTLY_USERNAME=your_plotly_username  # Optional: for Chart Studio integration
-PLOTLY_API_KEY=your_plotly_api_key    # Optional: for Chart Studio integration
+
+# Optional: Plotly Chart Studio Integration
+PLOTLY_USERNAME=your_plotly_username
+PLOTLY_API_KEY=your_plotly_api_key
 ```
 
 ### Basic Usage
 
 #### Web Application (Recommended)
+
+The platform uses a **two-server architecture** for separation of concerns:
+
+1. **Backend API Server** (`main.py`) - Handles agentic framework processing
+2. **Frontend Web Server** (`web_app.py`) - Handles UI, authentication, and file uploads
+
+**Starting the Application:**
+
 ```bash
-# Start the Flask web server
+# Terminal 1: Start the Backend API Server (Port 5001)
+python main.py
+
+# Terminal 2: Start the Frontend Web Server (Port 5000)
 python web_app.py
 
 # Access the application at http://localhost:5000
@@ -166,10 +252,23 @@ python web_app.py
 # - View results and download artifacts
 ```
 
-#### Interactive Mode (CLI)
+**Note:** Both servers must be running simultaneously. The frontend communicates with the backend via HTTP API calls.
+
+#### Backend API Usage
+
+The backend server (`main.py`) exposes a REST API endpoint:
+
 ```bash
-python main.py
+POST http://127.0.0.1:5001/run_agent_loop
+Content-Type: application/json
+
+{
+  "session_id": "your-session-id",
+  "question": "your analysis query"
+}
 ```
+
+The backend processes requests through the agentic framework and returns structured responses with artifacts and analysis results.
 
 #### RAG Document Processing
 ```bash
@@ -183,11 +282,6 @@ python agentLoop/rag_ingest.py search "your query"
 python agentLoop/rag_ingest.py chat "your question"
 ```
 
-#### Testing the Complete Pipeline
-```bash
-cd examples_NR
-python test_complete_dataflow_pipeline.py
-```
 
 ## 📋 Detailed Usage
 
@@ -287,22 +381,95 @@ answer = chat_with_gemini("your question", context_chunks)
 - **HTML**: Web content with screenshot fallback
 - **Images**: OCR with Gemini multimodal fallback
 
+### Backend API Usage
+
+The backend server (`main.py`) provides a REST API endpoint for programmatic access:
+
+#### Endpoint: `/run_agent_loop`
+
+**Method**: `POST`
+
+**URL**: `http://127.0.0.1:5001/run_agent_loop`
+
+**Headers**:
+```
+Content-Type: application/json
+```
+
+**Request Body**:
+```json
+{
+  "session_id": "uuid-string",
+  "question": "Your analysis query"
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "session_id": "uuid-string",
+  "output_directory": "generated_charts/{session_id}",
+  "final_answer_text": "Analysis results...",
+  "artifacts": {
+    "session_dir": "generated_charts/{session_id}",
+    "exists": true,
+    "files": {
+      "html": [...],
+      "png": [...],
+      "svg": [...],
+      "pdf": [...],
+      "json": [...],
+      "yaml": [...]
+    },
+    "preferred_entry": {
+      "relative": "generated_charts/{session_id}/plotly_index.html",
+      "public_url": "http://localhost:5000/static/generated_charts/{session_id}/plotly_index.html"
+    }
+  },
+  "classification": {
+    "user_query": "Your query",
+    "primary_classification": "quantitative|qualitative",
+    "secondary_classification": "Report|Chart|None"
+  }
+}
+```
+
+**Error Responses**:
+- `400`: Missing required parameters (session_id or question)
+- `404`: Session manifest not found
+- `500`: AgentLoop initialization failed or processing error
+- `502`: Backend service unavailable (from frontend)
+
+**Note**: The session_id must correspond to an existing session manifest in the `results/` directory, created during file upload.
+
 ### Web Interface Usage
+
+#### Prerequisites
+Ensure both servers are running:
+- Backend API server: `python main.py` (port 5001)
+- Frontend web server: `python web_app.py` (port 5000)
 
 #### User Registration and Authentication
 1. Navigate to `http://localhost:5000/register`
 2. Create a new account with username and password
 3. Login at `http://localhost:5000/login`
+4. Password hashing ensures secure credential storage
 
 #### File Upload and Analysis
 1. **Upload Files**: Select one or multiple files (CSV, Excel, JSON, PDF, HTML)
+   - Files are stored in `uploads/` directory with unique identifiers
+   - Session manifest created in `results/` directory
 2. **Enter Query**: Type your analysis question or request
 3. **Submit**: Click "Submit Query" to start processing
+   - Frontend forwards request to backend API
+   - Backend processes through agentic framework
 4. **View Results**: Results appear with:
    - Text answer/summary
    - Interactive charts (if generated)
    - Downloadable artifacts (PNG, SVG, HTML, PDF)
    - Session ID for tracking
+   - Public URLs for artifact access
 
 #### UI Integration
 The platform provides a structured JSON payload for UI consumption:
@@ -310,20 +477,42 @@ The platform provides a structured JSON payload for UI consumption:
 {
   "success": true,
   "session_id": "60437395",
+  "output_directory": "generated_charts/60437395",
   "final_answer_text": "Analysis summary...",
   "artifacts": {
+    "session_dir": "generated_charts/60437395",
+    "exists": true,
     "files": {
-      "html": [...],
+      "html": [
+        {
+          "relative": "generated_charts/60437395/plotly_index.html",
+          "public_url": "http://localhost:5000/static/generated_charts/60437395/plotly_index.html"
+        }
+      ],
       "png": [...],
-      "svg": [...]
+      "svg": [...],
+      "pdf": [...],
+      "json": [...],
+      "yaml": [...]
     },
     "preferred_entry": {
       "relative": "generated_charts/60437395/plotly_index.html",
-      "public_url": "http://example.com/generated_charts/60437395/plotly_index.html"
+      "public_url": "http://localhost:5000/static/generated_charts/60437395/plotly_index.html"
     }
+  },
+  "classification": {
+    "user_query": "Analyze sales trends",
+    "primary_classification": "quantitative",
+    "secondary_classification": "Report"
   }
 }
 ```
+
+**Key Features:**
+- Session-based artifact organization
+- Public URLs for direct file access
+- Classification metadata for query routing
+- Preferred entry point (plotly_index.html) for dashboards
 
 See `UI_PAYLOAD_EXTRACTION_GUIDE.md` for detailed integration documentation.
 
@@ -453,66 +642,37 @@ TOP_K=5                                # Search result count
 
 ### Web Application Configuration
 
-Flask application settings in `web_app.py`:
+**Frontend Server** (`web_app.py`):
 ```python
-app.secret_key = 'your-secret-key-here'  # Change in production
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 UPLOAD_FOLDER = './uploads'
+RESULTS_FOLDER = './results'
 ALLOWED_EXTENSIONS = {'csv', 'json', 'xlsx', 'xls', 'html', 'htm', 'pdf'}
+BACKEND_API_URL = "http://127.0.0.1:5001/run_agent_loop"  # Backend endpoint
 ```
 
-### Export Layer Configuration
+**Backend Server** (`main.py`):
+```python
+# CORS enabled for cross-origin requests
+# AgentLoop4 initialized on startup
+# Output directory: generated_charts/
+# Session manifests stored in: results/
+```
 
-Plotly Chart Studio integration for shareable dashboards:
+**Environment Variables:**
 ```env
-PLOTLY_USERNAME=your_username
-PLOTLY_API_KEY=your_api_key
+FLASK_SECRET_KEY=your-secret-key-here  # For session management
+OUTPUTS_DIR=./generated_charts  # Optional: custom output directory
 ```
 
-Configure in `export/plotly_v6.py` for custom styling and branding.
-
-## 🧪 Testing
-
-### Sample Datasets
-
-The project includes several sample datasets for testing:
-- **`sales_data_sample.csv`**: Sales transaction data (2,825 rows)
-- **`us_patent_data.xlsx`**: US patent analysis data
-- **`assignee_inventor.csv`**: Patent assignee and inventor mapping
-- **`SaleData.xlsx`**: Sales performance data
-- **`Sample - Superstore.xls`**: Retail superstore dataset
-
-### Complete Pipeline Test
+# Running the main application
 ```bash
-cd examples_NR
-python test_complete_dataflow_pipeline.py
-```
-
-### Test with Sample Data
-```bash
-# Start web app and upload one of the sample files
-python web_app.py
-
-# Or use CLI mode
+# Terminal 1: Start backend server
 python main.py
-# When prompted, provide path: ./sales_data_sample.csv
-# Query: "Analyze sales trends by region"
-```
 
-### Individual Component Tests
-```bash
-cd examples_NR
-python test_conversation_planner.py  # Test query routing
-python intelligence_combined_demo.py  # Test intelligence layer
-python orchestration_layer_demo.py   # Test orchestration
-```
-
-### RAG System Test
-```bash
-# Place test documents in documents/ directory
-python agentLoop/rag_ingest.py ingest
-python agentLoop/rag_ingest.py search "test query"
-```
+# Terminal 2: Start frontend server
+python web_app.py
 
 ## 💡 Business Value
 
@@ -572,20 +732,20 @@ python agentLoop/rag_ingest.py search "test query"
 ### Common Issues
 
 #### 1. Web Application Issues
-- **Port Already in Use**: Change port in `web_app.py` or stop conflicting service
+- **Port Already in Use**: 
+  - Frontend (5000): Change port in `web_app.py` or stop conflicting service
+  - Backend (5001): Change port in `main.py` and update `BACKEND_API_URL` in `web_app.py`
+- **Backend Connection Failed**: Ensure `main.py is running on port 5001 before starting `web_app.py`
+- **CORS Errors**: Verify `flask-cors` is installed and CORS is enabled in `main.py`
 - **File Upload Fails**: Check `UPLOAD_FOLDER` permissions and `MAX_CONTENT_LENGTH` setting
 - **Session Timeout**: Increase timeout or check `app.secret_key` configuration
 - **Login Issues**: Verify `users.json` exists and has proper permissions
+- **Session Manifest Not Found**: Ensure file upload completed successfully and `results/` directory exists
 
 #### 2. Plotly Chart Studio Integration
 - **Charts Not Uploading**: Verify `PLOTLY_USERNAME` and `PLOTLY_API_KEY` in `.env`
 - **URL Generation Fails**: Check internet connectivity and Chart Studio credentials
 - **Index HTML Missing**: Ensure `export/plotly_v6.py` runs successfully
-
-#### 3. MCP Server Connection Failures
-- Check `config/mcp_server_config.yaml`
-- Verify API keys in `.env` file
-- Ensure required services are accessible
 
 #### 4. File Not Found Errors
 - Verify file paths are correct and files exist
@@ -635,10 +795,13 @@ Dataflow_AI/
 │   ├── orchestration_flow.py      # Orchestration layer workflow
 │   ├── chart_executor.py          # Chart generation and execution
 │   ├── rag_ingest.py             # RAG document processing
-│   └── flow.py                    # Main agent loop
+│   ├── flow.py                    # Main agent loop (AgentLoop4)
+│   ├── data_processing_flow.py    # Data processing workflow
+│   ├── contextManager.py          # Execution context management
+│   └── model_manager.py           # Model configuration management
 ├── action/                        # Code execution and sandboxing
-│   ├── executor.py
-│   └── execute_step.py
+│   ├── executor.py                # Safe code execution
+│   └── execute_step.py            # Step-by-step execution
 ├── export/                        # Report generation and export
 │   ├── plotly_v6.py              # Plotly dashboard generation
 │   └── report_agent.py           # Automated reporting
@@ -652,24 +815,33 @@ Dataflow_AI/
 │   ├── data_*.txt                # Data processing prompts
 │   ├── recommendation_prompt.txt
 │   ├── generation_prompt.txt
-│   └── narrative_prompt.txt
+│   ├── narrative_prompt.txt
+│   ├── chart_executor_prompt.txt
+│   ├── discovery_prompt.txt
+│   └── monitoring_prompt.txt
 ├── templates/                     # Web UI templates
-│   ├── index.html
-│   ├── login.html
-│   └── register.html
+│   ├── index.html                 # Main dashboard
+│   ├── login.html                 # Login page
+│   └── register.html             # Registration page
 ├── static/                        # Web UI static assets
-│   ├── css/
-│   └── js/
+│   ├── css/                       # Stylesheets
+│   └── js/                        # JavaScript files
 ├── utils/                         # Utility functions
-│   ├── utils.py
-│   └── json_parser.py
+│   ├── utils.py                   # Logging and helpers
+│   └── json_parser.py            # JSON parsing utilities
 ├── examples_NR/                   # Test scripts and demos
-├── generated_charts/              # Output directory
+│   ├── test_complete_dataflow_pipeline.py
+│   ├── test_conversation_planner.py
+│   ├── intelligence_combined_demo.py
+│   └── orchestration_layer_demo.py
+├── generated_charts/              # Output directory (session-based)
 ├── uploads/                       # User file uploads
-├── main.py                        # CLI entry point
-├── web_app.py                    # Web application entry point
+├── results/                       # Session manifests
+├── main.py                        # Backend API server (port 5001)
+├── web_app.py                    # Frontend web server (port 5000)
 ├── requirements.txt              # pip dependencies
 ├── pyproject.toml                # UV package configuration
+├── UI_PAYLOAD_EXTRACTION_GUIDE.md # UI integration guide
 └── README.md                     # This file
 ```
 
@@ -736,8 +908,9 @@ When extending DataFlow AI:
 
 ### Web Framework
 - **Flask 3.1+**: Web application framework
+- **Flask-CORS**: Cross-origin resource sharing support
 - **Jinja2**: Template engine for HTML rendering
-- **Werkzeug**: WSGI utility library
+- **Werkzeug**: WSGI utility library and security utilities
 
 ### Document Processing
 - **PyMuPDF / pymupdf4llm**: PDF text extraction
@@ -768,18 +941,21 @@ When extending DataFlow AI:
 ## 📄 Documentation
 
 - **Main README**: This file
-- **UI Integration Guide**: See `UI_PAYLOAD_EXTRACTION_GUIDE.md`
-- **Architecture Diagrams**: See `DataFlow_Drawn_Architecture.jpeg` and `.drawio` files
+- **UI Integration Guide**: See `UI_PAYLOAD_EXTRACTION_GUIDE.md` for detailed payload structure
+- **Architecture Diagrams**: 
+  - `DataFlow_Drawn_Architecture.jpeg` - Visual architecture overview
+  - `DataFlowAI_Architecture.drawio` - Editable Draw.io diagram
+  - `DataFlowAI_Architecture.html` - Interactive HTML diagram
 - **Prompt Templates**: Located in `prompts/` directory
 - **Configuration Examples**: Located in `config/` directory
+- **Sample Data**: Test datasets included in project root
 
 ## 📞 Support and Contact
 
 For issues, questions, or contributions:
 1. Review the troubleshooting section above
-2. Check example scripts in `examples_NR/`
-3. Review configuration files in `config/`
-4. Consult the UI integration guide for web interface issues
+2. Review configuration files in `config/`
+3. Consult the UI integration guide for web interface issues
 
 ---
 
