@@ -36,7 +36,8 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config['UPLOAD_FOLDER'] = str(UPLOAD_FOLDER)
 
 # Define the URL of our backend API endpoint
-BACKEND_API_URL = "http://127.0.0.1:5001/run_agent_loop"
+BACKEND_API_URL = "http://13.234.11.1:5001/run_agent_loop"
+# BACKEND_API_URL = "http://127.0.0.1:5001/run_agent_loop"
 
 # --- NEW: Cache-Busting ---
 # This dictionary will hold a timestamp to append to static files

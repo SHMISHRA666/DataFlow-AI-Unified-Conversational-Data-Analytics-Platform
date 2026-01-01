@@ -220,6 +220,6 @@ def run_agent_loop():
         return jsonify({"error": str(e), "success": False}), 500
 
 if __name__ == '__main__':
-    log_step(f"Starting Backend Agentic Framework Server on http://127.0.0.1:5001 (PID: {os.getpid()})")
+    log_step(f"Starting Backend Agentic Framework Server on http://13.234.11.1:5000/ (PID: {os.getpid()})")
     app.run(debug=True, port=5001)
 

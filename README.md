@@ -259,7 +259,7 @@ python web_app.py
 The backend server (`main.py`) exposes a REST API endpoint:
 
 ```bash
-POST http://127.0.0.1:5001/run_agent_loop
+POST http://13.234.11.1:5000/run_agent_loop
 Content-Type: application/json
 
 {
@@ -389,7 +389,7 @@ The backend server (`main.py`) provides a REST API endpoint for programmatic acc
 
 **Method**: `POST`
 
-**URL**: `http://127.0.0.1:5001/run_agent_loop`
+**URL**: `http://13.234.11.1:5000/run_agent_loop`
 
 **Headers**:
 ```
@@ -647,7 +647,7 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 UPLOAD_FOLDER = './uploads'
 RESULTS_FOLDER = './results'
 ALLOWED_EXTENSIONS = {'csv', 'json', 'xlsx', 'xls', 'html', 'htm', 'pdf'}
-BACKEND_API_URL = "http://127.0.0.1:5001/run_agent_loop"  # Backend endpoint
+BACKEND_API_URL = "http://13.234.11.1:5000/run_agent_loop"  # Backend endpoint
 ```
 
 **Backend Server** (`main.py`):
