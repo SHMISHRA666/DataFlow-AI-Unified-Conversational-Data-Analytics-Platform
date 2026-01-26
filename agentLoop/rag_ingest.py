@@ -669,7 +669,8 @@ def chunk_text(text: str, size_words: int = CHUNK_SIZE_WORDS, overlap: int = CHU
 
 # ---- 5) Get embedding ----
 def get_embedding(text: str) -> np.ndarray:
-    payload = {"model": EMBED_MODEL, "prompt": text}
+    # payload = {"model": EMBED_MODEL, "prompt": text}
+    payload = {"model": EMBED_MODEL, "input": text}
     headers = {"Content-Type": "application/json"}
     if EMBED_API_KEY:
         headers["Authorization"] = f"Bearer {EMBED_API_KEY}"

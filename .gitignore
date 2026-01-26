@@ -9,7 +9,11 @@ __pycache__/
 .venv/
 venv/
 env/
-
+*accessKeys*.csv
+*.pem
+.env
+uploads/
+generated_charts/
 # FAISS index & generated files
 faiss_index/
 documents/images/

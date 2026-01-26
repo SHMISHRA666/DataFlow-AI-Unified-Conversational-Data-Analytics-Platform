@@ -219,7 +219,12 @@ def run_agent_loop():
         log_error(f"An error occurred in /run_agent_loop: {e}\n{traceback.format_exc()}")
         return jsonify({"error": str(e), "success": False}), 500
 
+# if __name__ == '__main__':
+#     log_step(f"Starting Backend Agentic Framework Server on http://127.0.0.1:5001 (PID: {os.getpid()})")
+#     app.run(debug=True, port=5001)
 if __name__ == '__main__':
-    log_step(f"Starting Backend Agentic Framework Server on http://127.0.0.1:5001 (PID: {os.getpid()})")
-    app.run(debug=True, port=5001)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 5001))
 
+    log_step(f"Starting Backend Agentic Framework Server on http://{host}:{port} (PID: {os.getpid()})")
+    app.run(debug=True, host=host, port=port)

@@ -250,6 +250,10 @@ def serve_artifact(session_id, filename):
     """Serves files from the generated_charts directory."""
     return send_from_directory(GENERATED_CHARTS_DIR / session_id, filename)
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+# if __name__ == '__main__':
+#     app.run(debug=True, port=5000)
 
+if __name__ == '__main__':
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 5000))
+    app.run(debug=True, host=host, port=port)

@@ -488,7 +488,7 @@ cd examples_NR
 python test_complete_dataflow_pipeline.py
 ```
 
-### Test with Sample Data
+### Test with Sample Datda
 ```bash
 # Start web app and upload one of the sample files
 python web_app.py

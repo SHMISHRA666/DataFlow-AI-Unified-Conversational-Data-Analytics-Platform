@@ -1,0 +1,38 @@
+# Virtual environment
+.venv/
+venv/
+#env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Local indices & generated embeddings
+faiss_index/
+*.bin
+*.json
+
+# Uploaded or temporary documents
+# documents/*
+# !documents/images/        # Keep the folder structure but ignore file contents
+# documents/images/*
+
+# System / OS files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+# Environment variables
+# .env
+# *.env
+
+# Backup or temp files
+*.tmp
+*.bak
+*.swp
